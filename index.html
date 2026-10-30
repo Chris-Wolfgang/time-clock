@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time Clock</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#667085; --card:#f4f6fa; --line:#dde2ea; --accent:#2563eb; --warn:#b45309; --danger:#c0392b; --ok:#16794c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171f; --fg:#e6e9f0; --muted:#98a2b3; --card:#1d222d; --line:#2e3544; --accent:#5b8def; --warn:#f0a35e; --danger:#ef6b5b; --ok:#4cc38a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,Segoe UI,sans-serif; }
+  main { max-width:860px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  h2 { font-size:15px; margin:0 0 8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .clock { font-size:44px; font-variant-numeric:tabular-nums; font-weight:600; line-height:1.1; }
+  .state { font-weight:600; }
+  .state.working { color:var(--ok); } .state.meal, .state.break { color:var(--warn); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input, select, button { font:inherit; color:inherit; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 12px; }
+  input[type=text] { flex:1; min-width:160px; }
+  button { cursor:pointer; }
+  button:disabled { opacity:.35; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  button.small { padding:2px 8px; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-top:12px; }
+  @media (max-width:560px) { .grid { grid-template-columns:repeat(2, 1fr); } }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:500; font-size:13px; }
+  td input { width:100%; padding:4px 6px; border-color:transparent; background:transparent; }
+  td input:hover, td input:focus { border-color:var(--line); background:var(--bg); }
+  .muted { color:var(--muted); } .lockrow td { color:var(--warn); font-size:13px; }
+  .scroll { overflow-x:auto; }
+  .dayhead td { padding-top:14px; border-bottom:2px solid var(--line); cursor:pointer; user-select:none; }
+  td input.implied { color:var(--muted); font-style:italic; }
+  td input.missing { border-color:var(--warn); }
+  #rows tr:not(.dayhead) td { white-space:nowrap; }
+  #rows tr:not(.dayhead) td:first-child { padding-left:28px; }
+  .dayhead .worked { float:right; font-weight:600; }
+  .stats { display:flex; gap:20px; flex-wrap:wrap; margin-top:8px; }
+  .stats b { display:block; font-size:18px; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Time Clock</h1>
+  <p class="muted" style="margin:-10px 0 16px">A personal log of your own time. Everything stays in your browser, and you can add, edit or delete any line.</p>
+
+  <div class="card">
+    <div class="clock" id="clock">00:00:00</div>
+    <div><span class="state" id="state">Clocked out</span> <span class="muted" id="since"></span></div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="desc" placeholder="Description (optional) — applied to the next button you press" autocomplete="off">
+    </div>
+    <div class="grid">
+      <button class="primary" id="b-In">Clock In</button>
+      <button id="b-MealStart">Meal Start</button>
+      <button id="b-BreakStart">Break Start</button>
+      <button id="b-Out">Clock Out</button>
+      <button id="b-MealEnd">Meal End</button>
+      <button id="b-BreakEnd">Break End</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between; margin-bottom:8px">
+      <div class="row">
+        <button id="prev" title="Previous week">&larr;</button>
+        <input type="date" id="day" title="Any date in the week">
+        <button id="next" title="Next week">&rarr;</button>
+        <h2 style="margin:0 0 0 8px" id="weekTitle">Week</h2>
+      </div>
+      <div class="row muted">
+        <label>Target <input type="number" id="target" min="0" step="0.5" style="width:80px"> h</label>
+        <label>Week starts <select id="weekStart"><option value="0">Sunday</option><option value="1">Monday</option></select></label>
+      </div>
+    </div>
+    <div class="stats" id="weekStats"></div>
+  </div>
+
+  <div class="card">
+    <h2>Log</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th style="width:130px">Event</th><th style="width:130px">Start</th><th style="width:130px">End</th><th style="width:90px">Duration</th><th>Description</th><th style="width:36px"></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <details style="margin-top:12px">
+      <summary class="muted">Add a line</summary>
+      <div class="row" style="margin-top:8px">
+        <select id="addType"></select>
+        <label class="muted">Start <input type="datetime-local" id="addStart" step="1"></label>
+        <label class="muted">End <input type="datetime-local" id="addEnd" step="1" title="Optional"></label>
+        <input type="text" id="addDesc" placeholder="Description (optional)">
+        <button id="addBtn">Add</button>
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Data</h2>
+    <div class="row">
+      <button id="export">Export CSV</button>
+      <button id="backup">Backup</button>
+      <button id="restore">Restore…</button>
+      <input type="file" id="file" accept=".json" hidden>
+      <button class="danger" id="clear">Clear all data</button>
+      <button id="quit" hidden>Stop service</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="lockBtn" hidden>Enable lock tracking</button>
+      <span class="muted" id="lockInfo"></span>
+    </div>
+    <p class="muted" id="storeInfo" style="margin-bottom:0"></p>
+  </div>
+</main>
+
+<script>
+(() => {
+  const KEY = 'timeClock.v2';
+  const LABEL = { In:'Clock In', Out:'Clock Out', MealStart:'Meal Start', MealEnd:'Meal End', BreakStart:'Break Start', BreakEnd:'Break End' };
+  // What each punch does to the clock, and which punches are allowed from each state.
+  const NEXT = { In:'work', MealEnd:'work', BreakEnd:'work', MealStart:'meal', BreakStart:'break', Out:'out' };
+  const ALLOWED = { out:['In'], work:['MealStart','BreakStart','Out'], meal:['MealEnd','Out'], break:['BreakEnd','Out'] };
+  const STATE_TEXT = { out:'Clocked out', work:'Working', meal:'On meal', break:'On break' };
+
+  let db = load();
+  function load() {
+    const base = { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY)) || {};
+      return Object.assign(base, saved, { settings: Object.assign(base.settings, saved.settings) });
+    }
+    catch { return base; }
+  }
+  // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
+  // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
+  let hosted = false, lockLive = false, pushTimer;
+  const API_HEADERS = { 'X-TimeClock': '1' };
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* storage unavailable */ }
+    if (hosted) pushData();
+  }
+  function pushData() {
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ punches: db.punches, events: db.events, lockSync: db.lockSync, settings: db.settings }) })
+        .then(r => { if (!r.ok) throw new Error(); })
+        .catch(() => alert('Could not save to the Time Clock service. Is it still running?'));
+    }, 150);
+  }
+
+  const $ = id => document.getElementById(id);
+  const pad = n => String(n).padStart(2, '0');
+  const fmtDur = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s % 3600 / 60))}:${pad(s % 60)}`; };
+  const fmtTime = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+  const dayStr = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  const dayStart = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getTime(); };
+  const localInput = t => `${dayStr(t)}T${fmtTime(t)}`;
+  // fmtTime is the 24-hour value <input type="time"> needs; showTime is for display in the user's clock format.
+  const showTime = t => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const sorted = () => db.punches.slice().sort((a, b) => a.t - b.t);
+
+  function currentState() {
+    const p = sorted();
+    return p.length ? NEXT[p[p.length - 1].type] : 'out';
+  }
+
+  // Interval helpers: lists of [start, end] in ms.
+  const total = ivs => ivs.reduce((n, [a, b]) => n + (b - a), 0);
+  function merge(ivs) {
+    const out = [];
+    for (const [a, b] of ivs.slice().sort((x, y) => x[0] - y[0])) {
+      const last = out[out.length - 1];
+      if (last && a <= last[1]) last[1] = Math.max(last[1], b); else if (b > a) out.push([a, b]);
+    }
+    return out;
+  }
+  function intersect(A, B) {
+    const out = [];
+    for (const [a, b] of A) for (const [c, d] of B) { const s = Math.max(a, c), e = Math.min(b, d); if (e > s) out.push([s, e]); }
+    return merge(out);
+  }
+
+  // Totals for one day, computed from the same lines the log shows.
+  // Worked = clocked-in time minus any meal, break or screen lock inside it (overlaps counted once).
+  function totalsFor(day, now) {
+    const dayIv = [[dayStart(day), dayEnd(day)]];
+    const pairs = pairUp(now).filter(x => x.startAt != null && !x.missing);
+    const of = kind => intersect(merge(pairs.filter(x => x.kind === kind).map(x => [x.startAt, x.endAt ?? now])), dayIv);
+    const shift = of('shift'), meal = of('meal'), brk = of('break'), lock = of('lock');
+    const away = intersect(shift, merge([...meal, ...brk, ...lock]));
+    return {
+      work: total(shift) - total(away),
+      meal: total(meal),
+      break: total(brk),
+      locked: total(intersect(shift, lock))
+    };
+  }
+
+  function cell(tr, text, cls) {
+    const td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls;
+    tr.appendChild(td); return td;
+  }
+
+  function render() {
+    const now = Date.now(), state = currentState(), day = $('day').value;
+    const last = sorted().pop();
+
+    $('state').textContent = STATE_TEXT[state]; $('state').className = 'state ' + state;
+    $('since').textContent = last && state !== 'out' ? `since ${showTime(last.t)}` : '';
+    for (const type of Object.keys(LABEL)) $('b-' + type).disabled = !ALLOWED[state].includes(type);
+
+    $('clock').textContent = fmtDur(totalsFor(dayStr(now), now).work);
+    renderWeek(day, now);
+
+    // Log: one collapsible header per day (clock in/out, hours worked), and each matching pair of
+    // events (clock in/out, meal, break, lock/unlock) on a single row.
+    const pairs = pairUp(now);
+    const tbody = $('rows'); tbody.textContent = '';
+    let any = false;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(weekFirst(day)); d.setDate(d.getDate() + i);
+      const ds = dayStr(d.getTime()), lo = dayStart(ds), hi = dayEnd(ds);
+      const items = pairs.filter(x => x.at >= lo && x.at < hi);
+      if (!items.length) continue;
+      any = true;
+
+      const open = expanded.has(ds), tot = totalsFor(ds, now);
+      const head = document.createElement('tr'), hc = document.createElement('td');
+      head.className = 'dayhead'; hc.colSpan = 6; hc.title = open ? 'Collapse' : 'Expand';
+      hc.onclick = () => { open ? expanded.delete(ds) : expanded.add(ds); render(); };
+      const title = document.createElement('strong');
+      title.textContent = `${open ? '▾' : '▸'} ${d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}`;
+      const worked = document.createElement('span'); worked.className = 'worked'; worked.textContent = `${fmtDur(tot.work)} worked (${hours(tot.work)} h)`;
+      hc.append(title, worked); head.appendChild(hc); tbody.appendChild(head);
+
+      if (open) items.forEach(x => tbody.appendChild(pairRow(x, now)));
+    }
+    if (!any) { const tr = document.createElement('tr'); const td = cell(tr, 'No entries this week', 'muted'); td.colSpan = 6; tbody.appendChild(tr); }
+
+    $('quit').hidden = !hosted;
+    $('lockBtn').hidden = hosted || idleState !== 'prompt';
+    $('lockInfo').textContent = hosted
+      ? (lockLive ? 'Lock tracking is on (Time Clock service).' : 'Lock tracking is offline: the Time Clock service is not responding.')
+      : IDLE_TEXT[idleState];
+    $('storeInfo').textContent = (hosted
+      ? 'Data is stored in %LOCALAPPDATA%\\TimeClock.'
+      : 'Data is stored in this browser only. Use Backup now and then, and Restore to move it to another browser or PC.');
+  }
+
+  const hours = ms => (ms / 3600000).toFixed(2);
+
+  const KIND = { shift: 'Clock In / Out', meal: 'Meal', break: 'Break', lock: 'Locked' };
+  const expanded = new Set([dayStr(Date.now())]);     // today starts expanded, other days collapsed
+
+  // Match starts with ends: In/Out, MealStart/MealEnd, BreakStart/BreakEnd, Lock/Unlock.
+  // Each pair: { kind, start, end, startAt, endAt, implicit, at }. endAt null = still running;
+  // implicit = ended by something else (e.g. Clock Out during a meal) rather than its own end punch.
+  const KIND_OF = { In: 'shift', Out: 'shift', MealStart: 'meal', MealEnd: 'meal', BreakStart: 'break', BreakEnd: 'break' };
+  function pairUp(now) {
+    const out = [], open = {};
+    const finish = (kind, endItem, t, implicit = false) => {
+      let x = open[kind];
+      if (!x) { if (!endItem) return; x = { kind, start: null, startAt: null }; out.push(x); }   // end without a start
+      x.end = endItem; x.endAt = t; x.implicit = implicit;
+      delete open[kind];
+    };
+    const begin = (kind, item) => {
+      const prev = open[kind];
+      if (prev) { finish(kind, null, item.t, true); prev.missing = true; }   // started again with no end recorded
+      open[kind] = { kind, start: item, end: null, startAt: item.t, endAt: null };
+      out.push(open[kind]);
+    };
+    // An end with `of` set is linked to its start (lines added or completed by hand), so overlapping
+    // lines stay paired correctly. Unlinked items (button presses, live lock events) pair in time order.
+    const all = [...db.punches, ...db.events], ids = new Set(all.map(i => i.id));
+    const linkedEnd = new Map(all.filter(i => i.of && ids.has(i.of)).map(i => [i.of, i]));
+    const isLinkedEnd = i => i.of && ids.has(i.of);
+    const linked = (kind, s) => {
+      const e = linkedEnd.get(s.id);
+      out.push({ kind, start: s, end: e, startAt: s.t, endAt: e.t });
+    };
+    for (const p of sorted()) {
+      if (isLinkedEnd(p)) continue;
+      if (linkedEnd.has(p.id)) { linked(KIND_OF[p.type], p); continue; }
+      switch (p.type) {
+        case 'In': begin('shift', p); break;
+        case 'Out': finish('meal', null, p.t, true); finish('break', null, p.t, true); finish('shift', p, p.t); break;
+        case 'MealStart': begin('meal', p); break;
+        case 'MealEnd': finish('meal', p, p.t); break;
+        case 'BreakStart': begin('break', p); break;
+        case 'BreakEnd': finish('break', p, p.t); break;
+      }
+    }
+    for (const e of db.events.slice().sort((a, b) => a.t - b.t)) {
+      if (isLinkedEnd(e)) continue;
+      if (linkedEnd.has(e.id)) linked('lock', e);
+      else if (e.type === 'Lock') begin('lock', e);
+      else finish('lock', e, e.t);
+    }
+    out.forEach(x => { x.at = x.startAt ?? x.endAt; });
+    return out.sort((a, b) => a.at - b.at);
+  }
+
+  const START_TYPE = { shift: 'In', meal: 'MealStart', break: 'BreakStart', lock: 'Lock' };
+  const END_TYPE = { shift: 'Out', meal: 'MealEnd', break: 'BreakEnd', lock: 'Unlock' };
+  const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+
+  // Lock/unlock live in db.events, everything else in db.punches.
+  function addItem(kind, type, t, desc = '', of = undefined) {
+    const item = { id: newId(), t, type, desc };
+    if (of) item.of = of;     // links an end to its start
+    (kind === 'lock' ? db.events : db.punches).push(item);
+    return item;
+  }
+
+  // Editable time for one side of a row. A missing side shows an empty box (or, when something else
+  // ended it, that time greyed out); filling it in adds the start/end on the other side's date.
+  function timeCell(x, side) {
+    const item = x[side], td = document.createElement('td'), ti = document.createElement('input');
+    const implied = !item && side === 'end' && x.implicit && !x.missing;
+    ti.type = 'time'; ti.step = 1;
+    ti.value = item ? fmtTime(item.t) : implied ? fmtTime(x.endAt) : '';
+    if (implied) { ti.className = 'implied'; ti.title = 'Ended by Clock Out. Change it to record a separate end.'; }
+    else if (!item && (side === 'start' || x.missing)) { ti.className = 'missing'; ti.title = `No ${side} recorded. Enter one.`; }
+    else if (!item) ti.title = 'Still running. Enter a time to end it.';
+    ti.onchange = () => {
+      const [h, m, s] = ti.value.split(':').map(Number);
+      if (isNaN(h)) { render(); return; }
+      const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
+      if (item) item.t = d.getTime();
+      else if (side === 'end') addItem(x.kind, END_TYPE[x.kind], d.getTime(), '', x.start.id);
+      else x.end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id;
+      save(); render();
+    };
+    td.appendChild(ti);
+    return td;
+  }
+
+  function pairRow(x, now) {
+    const tr = document.createElement('tr');
+    if (x.kind === 'lock') tr.className = 'lockrow';
+    cell(tr, KIND[x.kind]);
+    tr.appendChild(timeCell(x, 'start'));
+    tr.appendChild(timeCell(x, 'end'));
+    cell(tr, x.startAt == null || x.missing ? '' : fmtDur((x.endAt ?? now) - x.startAt) + (x.endAt == null ? '…' : ''), 'muted');
+
+    const dc = document.createElement('td'), di = document.createElement('input');
+    di.type = 'text'; di.placeholder = 'add description';
+    di.value = [x.start && x.start.desc, x.end && x.end.desc].filter(Boolean).join(' · ');
+    di.onchange = () => {
+      const keep = x.start || x.end, other = x.start ? x.end : null;
+      keep.desc = di.value.trim(); if (other) other.desc = '';
+      save();
+    };
+    dc.appendChild(di); tr.appendChild(dc);
+
+    const xc = document.createElement('td'), del = document.createElement('button');
+    del.className = 'small danger'; del.textContent = '✕'; del.title = 'Delete this row';
+    del.onclick = () => {
+      if (!confirm(`Delete this ${KIND[x.kind]} row?`)) return;
+      const keep = p => p !== x.start && p !== x.end;
+      db.punches = db.punches.filter(keep); db.events = db.events.filter(keep); save(); render();
+    };
+    xc.appendChild(del); tr.appendChild(xc);
+    return tr;
+  }
+  const dayEnd = s => { const d = new Date(dayStart(s)); d.setDate(d.getDate() + 1); return d.getTime(); };
+  function weekFirst(day) {
+    const sel = new Date(dayStart(day));
+    sel.setDate(sel.getDate() - ((sel.getDay() - db.settings.weekStart + 7) % 7));
+    return sel;
+  }
+
+  function renderWeek(day, now) {
+    const { target } = db.settings;
+    const first = weekFirst(day);
+    let total = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(first); d.setDate(first.getDate() + i);
+      total += totalsFor(dayStr(d.getTime()), now).work;
+    }
+    const end = new Date(first); end.setDate(first.getDate() + 6);
+    $('weekTitle').textContent = `Week of ${first.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+    const left = target * 3600000 - total;
+    $('weekStats').textContent = '';
+    [['Week total', `${fmtDur(total)} (${hours(total)} h)`], [left >= 0 ? 'Remaining' : 'Overtime', `${fmtDur(Math.abs(left))} (${hours(Math.abs(left))} h)`]].forEach(([k, v]) => {
+      const dv = document.createElement('div'), b = document.createElement('b');
+      b.textContent = v; dv.appendChild(b); dv.appendChild(document.createTextNode(k)); $('weekStats').appendChild(dv);
+    });
+  }
+
+  // Re-render each second only while the clock is running, and not while typing in a log field.
+  function tick() {
+    const state = currentState();
+    if (state === 'out') return;
+    if (document.activeElement && document.activeElement.closest('#rows')) {
+      if (state === 'work') $('clock').textContent = fmtDur(totalsFor(dayStr(Date.now()), Date.now()).work);
+      return;
+    }
+    render();
+  }
+
+  function punch(type, t = Date.now(), desc = '') {
+    addItem('punch', type, t, desc);
+    save();
+  }
+  Object.keys(LABEL).forEach(type => {
+    $('b-' + type).onclick = () => {
+      punch(type, Date.now(), $('desc').value.trim());
+      $('desc').value = ''; $('day').value = dayStr(Date.now()); render();
+    };
+  });
+
+  Object.keys(KIND).forEach(k => { const o = document.createElement('option'); o.value = k; o.textContent = KIND[k]; $('addType').appendChild(o); });
+  $('addStart').value = localInput(Date.now());
+  $('addBtn').onclick = () => {
+    const kind = $('addType').value, start = Date.parse($('addStart').value), end = Date.parse($('addEnd').value);
+    if (isNaN(start)) { alert('Enter a start date and time.'); return; }
+    if (!isNaN(end) && end <= start) { alert('The end must be after the start.'); return; }
+    const first = addItem(kind, START_TYPE[kind], start, $('addDesc').value.trim());
+    if (!isNaN(end)) addItem(kind, END_TYPE[kind], end, '', first.id);
+    $('addDesc').value = ''; $('addEnd').value = '';
+    $('day').value = dayStr(start); expanded.add(dayStr(start));
+    save(); render();
+  };
+
+  const shift = n => { const d = new Date(dayStart($('day').value)); d.setDate(d.getDate() + 7 * n); $('day').value = dayStr(d.getTime()); render(); };
+  $('prev').onclick = () => shift(-1); $('next').onclick = () => shift(1); $('day').onchange = render;
+
+  $('export').onclick = () => {
+    const q = s => `"${String(s).replace(/"/g, '""')}"`;
+    const lines = ['timestamp,event,description'];
+    sorted().forEach(p => lines.push([new Date(p.t).toISOString(), LABEL[p.type], q(p.desc || '')].join(',')));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' }));
+    a.download = `time-clock-${dayStr(Date.now())}.csv`; a.click(); URL.revokeObjectURL(a.href);
+  };
+
+  // Lines of "timestamp,Lock|Unlock,reason" -> [{t, type}], skipping anything already in `seen`.
+  function parseLockCsv(text, seen = new Set()) {
+    const out = [];
+    text.split(/\r?\n/).forEach(line => {
+      const [ts, type] = line.split(',');
+      const t = Date.parse(ts);
+      if (isNaN(t) || (type !== 'Lock' && type !== 'Unlock') || seen.has(t + type)) return;
+      seen.add(t + type); out.push({ t, type });
+    });
+    return out;
+  }
+
+  $('backup').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
+    a.download = `time-clock-backup-${dayStr(Date.now())}.json`; a.click(); URL.revokeObjectURL(a.href);
+  };
+  $('restore').onclick = () => $('file').click();
+  $('file').onchange = async ev => {
+    const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { alert('That file is not a Time Clock backup.'); return; }
+    if (!data || !Array.isArray(data.punches)) { alert('That file is not a Time Clock backup.'); return; }
+    if (!confirm(`Replace all current data with this backup (${data.punches.length} entries)?`)) return;
+    db = { punches: data.punches, events: hosted ? db.events : (Array.isArray(data.events) ? data.events : []),
+           settings: Object.assign({ target: 40, weekStart: 1 }, data.settings) };
+    $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
+    save(); render();
+  };
+
+  // Browser lock tracking (Chrome/Edge Idle Detection API). Works only while the page is open,
+  // and only over https or localhost (GitHub Pages qualifies).
+  const IDLE_TEXT = {
+    starting: '',
+    prompt: 'Allow this page to see when your screen is locked, so locked time is taken out of your hours worked.',
+    on: 'Lock tracking is on. Keep this page open (a background tab is fine).',
+    denied: 'Lock tracking is blocked. Click the icon left of the address bar, open Site settings, set "Your device use" to Allow, then reload.',
+    unsupported: 'Lock tracking needs Chrome or Edge. Time tracking still works in this browser.'
+  };
+  let idleState = 'starting';
+
+  function recordScreen(screenState) {
+    const type = screenState === 'locked' ? 'Lock' : 'Unlock';
+    const last = db.events.reduce((m, e) => (!m || e.t > m.t ? e : m), null);
+    if ((last ? last.type : 'Unlock') === type) return;   // also closes a lock left open while the page was shut
+    addItem('lock', type, Date.now());
+    save();
+    if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
+  }
+
+  async function startIdle(fromClick) {
+    if (!('IdleDetector' in window)) { idleState = 'unsupported'; render(); return; }
+    try {
+      const perm = fromClick
+        ? await IdleDetector.requestPermission()
+        : (await navigator.permissions.query({ name: 'idle-detection' })).state;
+      if (perm !== 'granted') { idleState = perm === 'denied' ? 'denied' : 'prompt'; render(); return; }
+      const detector = new IdleDetector();
+      detector.addEventListener('change', () => recordScreen(detector.screenState));
+      await detector.start({ threshold: 60000 });
+      idleState = 'on';
+      recordScreen(detector.screenState);
+      render();
+    } catch {
+      idleState = 'denied'; render();
+    }
+  }
+  $('lockBtn').onclick = () => startIdle(true);
+
+  async function pollEvents() {
+    try {
+      const r = await fetch('/api/events', { headers: API_HEADERS });
+      if (!r.ok) throw new Error();
+      // Only take events newer than the last sync, so rows the user edited or deleted stay that way.
+      const since = db.lockSync || 0, seen = new Set(db.events.map(e => e.t + e.type));
+      const fresh = parseLockCsv(await r.text(), seen).filter(e => e.t > since);
+      const changed = !lockLive || fresh.length > 0;
+      fresh.forEach(e => addItem('lock', e.type, e.t));
+      if (fresh.length) { db.lockSync = Math.max(...fresh.map(e => e.t)); save(); }
+      lockLive = true;
+      if (changed && !(document.activeElement && document.activeElement.closest('#rows'))) render();
+    } catch {
+      if (lockLive) { lockLive = false; render(); }
+    }
+  }
+
+  // Detect the Time Clock service; fall back to plain browser storage if it isn't there.
+  async function connect() {
+    if (location.hostname !== 'localhost' || location.port !== '47653') return;
+    try {
+      const r = await fetch('/api/data', { headers: API_HEADERS });
+      if (!r.ok) return;
+      const remote = await r.json();
+      hosted = true;
+      if (remote.punches && remote.punches.length) {
+        db.punches = remote.punches;
+        db.events = remote.events || [];
+        db.lockSync = remote.lockSync || 0;
+        db.settings = Object.assign(db.settings, remote.settings);
+      } else if (db.punches.length) {
+        pushData();                 // first run: move this browser's data into the file
+      }
+      $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
+      await pollEvents();
+      setInterval(pollEvents, 5000);
+      render();
+    } catch { /* not served by the service */ }
+  }
+
+  $('quit').onclick = async () => {
+    if (!confirm('Stop the Time Clock service? Lock/unlock will not be tracked until you start it again.')) return;
+    try { await fetch('/api/quit', { method: 'POST', headers: API_HEADERS }); } catch { /* ignore */ }
+    lockLive = false; render();
+  };
+
+  $('clear').onclick = () => { if (confirm('Delete all entries and lock events?')) { db = { punches: [], events: [], settings: db.settings }; save(); render(); } };
+
+  $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
+  $('target').onchange = () => { db.settings.target = Math.max(0, parseFloat($('target').value) || 0); save(); render(); };
+  $('weekStart').onchange = () => { db.settings.weekStart = Number($('weekStart').value); save(); render(); };
+
+  $('day').value = dayStr(Date.now());
+  render(); setInterval(tick, 1000);
+  connect().then(() => { if (!hosted) startIdle(false); });
+})();
+</script>
+</body>
+</html>
