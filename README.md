@@ -28,8 +28,21 @@ without lock tracking.
 ## Where your data lives
 
 Everything is saved in your browser's local storage for this site. Nothing is sent anywhere.
-Clearing site data removes it, and it does not follow you to another browser or PC. Use
-**Backup** regularly; **Restore** loads a backup into any browser.
+
+> [!WARNING]
+> **Your entries are tied to the exact web address and the exact browser you used.**
+>
+> - **Same address only.** Entries made at https://chris-wolfgang.github.io/time-clock/ are not
+>   visible from any other address, such as a downloaded copy of `index.html`, a `localhost`
+>   address, or the Windows service mode. Each address starts empty.
+> - **Same browser and profile only.** Chrome and Edge don't share data, and neither do two
+>   profiles in the same browser. Private (Incognito / InPrivate) windows keep nothing after they
+>   close, and another computer always starts empty, even if you're signed in to the browser.
+> - **Clearing site data** (cookies and site data, or a cleanup tool) deletes your entries.
+>
+> To move your entries, click **Backup** where they are, then **Restore** in the other browser or
+> at the other address. Restore replaces everything already there. Pick one browser and keep
+> using it, and back up regularly.
 
 ## Optional: Windows service mode
 
