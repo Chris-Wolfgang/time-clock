@@ -139,6 +139,13 @@
     }
     catch { return base; }
   }
+  // Each tab holds its own copy of the data and saves all of it, so a second open tab would
+  // overwrite this one's changes. When another tab saves, take its copy.
+  window.addEventListener('storage', e => {
+    if (e.key !== KEY) return;
+    db = load();
+    if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
+  });
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
   // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
   let hosted = false, lockLive = false, pushTimer;
