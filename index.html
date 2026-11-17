@@ -109,6 +109,7 @@
       <button id="backup">Backup</button>
       <button id="restore">Restore…</button>
       <input type="file" id="file" accept=".json" hidden>
+      <button id="diagBtn" title="Download a log of what the browser reported about screen lock, for troubleshooting">Diagnostics</button>
       <button class="danger" id="clear">Clear all data</button>
       <button id="quit" hidden>Stop service</button>
     </div>
@@ -153,7 +154,7 @@
     return drop.size ? events.filter(e => !drop.has(e)) : events;
   }
   // Another tab of this page saved: pick up its changes so this tab doesn't overwrite them.
-  window.addEventListener('storage', e => { if (e.key === KEY) { db = load(); render(); } });
+  window.addEventListener('storage', e => { if (e.key === KEY) { db = load(); render(); diag('otherTab'); } });
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
   // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
   let hosted = false, lockLive = false, pushTimer;
@@ -507,8 +508,36 @@
   // Heartbeat: it stalls while the browser has paused (frozen / put to sleep) this tab, so a
   // change that arrives after a long stall happened some time during the stall, not now.
   const STALL = 90000;
-  let lastBeat = Date.now(), stall = null;
-  setInterval(() => { lastBeat = Date.now(); }, 5000);
+  let lastBeat = Date.now(), stall = null, diagBeat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    if (now - diagBeat > 15000) diag('gap', { ms: now - diagBeat });   // timers stalled this long
+    lastBeat = diagBeat = now;
+  }, 5000);
+
+  // Diagnostic log: the raw signals behind lock tracking, kept apart from your entries (not in
+  // Backup, CSV or totals). The Diagnostics button downloads it. Oldest entries roll off.
+  const DIAG_KEY = 'timeClock.diag', DIAG_MAX = 3000, TAB = Math.random().toString(36).slice(2, 7);
+  function diag(what, extra = {}) {
+    try {
+      const log = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+      log.push({ local: new Date().toLocaleString(), t: Date.now(), tab: TAB, what,
+                 vis: document.visibilityState, focus: document.hasFocus(), ...extra });
+      localStorage.setItem(DIAG_KEY, JSON.stringify(log.slice(-DIAG_MAX)));
+    } catch { /* storage full or blocked: skip */ }
+  }
+  diag('open', { ua: navigator.userAgent });
+  for (const ev of ['visibilitychange', 'freeze', 'resume'])
+    document.addEventListener(ev, () => diag(ev));
+  for (const ev of ['focus', 'blur', 'online', 'offline'])
+    window.addEventListener(ev, () => diag(ev));
+  window.addEventListener('pageshow', e => diag('pageshow', { persisted: e.persisted }));
+  window.addEventListener('pagehide', e => diag('pagehide', { persisted: e.persisted }));
+  $('diagBtn').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([localStorage.getItem(DIAG_KEY) || '[]'], { type: 'application/json' }));
+    a.download = `time-clock-diagnostics-${dayStr(Date.now())}.json`; a.click(); URL.revokeObjectURL(a.href);
+  };
 
   function recordScreen(screenState) {
     const now = Date.now();
@@ -517,15 +546,19 @@
     const inStall = stall && now - stall.to < BLIP;
     const type = screenState === 'locked' ? 'Lock' : 'Unlock';
     const last = db.events.reduce((m, e) => (!m || e.t >= m.t ? e : m), null);   // ties: newest added
-    if ((last ? last.type : 'Unlock') === type) return;   // also closes a lock left open while the page was shut
+    const why = { type, last: last && last.type, lastT: last && last.t, stall };
+    if ((last ? last.type : 'Unlock') === type) { diag('same', why); return; }   // also closes a lock left open while the page was shut
     if (last && !last.of && !last.desc && now - last.t < BLIP) {
       // Lock then Unlock within seconds: drop both. Unlock then Lock again: keep the earlier lock going.
       db.events = db.events.filter(e => e !== last);
+      diag('blip', why);
     } else if (type === 'Lock' && inStall) {
       // The tab was paused, so the real lock time is unknown: start it when the tab was last awake.
       addItem('lock', 'Lock', stall.from, 'Approximate start: the browser paused this tab. Check the time.');
+      diag('approx', why);
     } else {
       addItem('lock', type, now);
+      diag('add', why);
     }
     save();
     if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
@@ -537,14 +570,20 @@
       const perm = fromClick
         ? await IdleDetector.requestPermission()
         : (await navigator.permissions.query({ name: 'idle-detection' })).state;
+      diag('permission', { perm, fromClick });
       if (perm !== 'granted') { idleState = perm === 'denied' ? 'denied' : 'prompt'; render(); return; }
       const detector = new IdleDetector();
-      detector.addEventListener('change', () => recordScreen(detector.screenState));
+      detector.addEventListener('change', () => {
+        diag('change', { screen: detector.screenState, user: detector.userState, sinceBeat: Date.now() - lastBeat });
+        recordScreen(detector.screenState);
+      });
       await detector.start({ threshold: 60000 });
       idleState = 'on';
+      diag('start', { screen: detector.screenState, user: detector.userState });
       recordScreen(detector.screenState);
       render();
-    } catch {
+    } catch (err) {
+      diag('error', { msg: String(err) });
       idleState = 'denied'; render();
     }
   }
