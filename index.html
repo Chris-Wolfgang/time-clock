@@ -134,10 +134,26 @@
     const base = { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
     try {
       const saved = JSON.parse(localStorage.getItem(KEY)) || {};
-      return Object.assign(base, saved, { settings: Object.assign(base.settings, saved.settings) });
+      const data = Object.assign(base, saved, { settings: Object.assign(base.settings, saved.settings) });
+      data.events = dropBlips(data.events);
+      return data;
     }
     catch { return base; }
   }
+  // Removes recorded Lock→Unlock pairs only seconds long (noise from earlier versions).
+  // Lines added or edited by hand (linked, or with a description) are kept.
+  function dropBlips(events) {
+    const s = [...events].sort((a, b) => a.t - b.t), drop = new Set();
+    for (let i = 0; i + 1 < s.length; i++) {
+      const a = s[i], b = s[i + 1];
+      if (a.type === 'Lock' && b.type === 'Unlock' && !a.of && !b.of && !a.desc && !b.desc && b.t - a.t < 5000) {
+        drop.add(a); drop.add(b); i++;
+      }
+    }
+    return drop.size ? events.filter(e => !drop.has(e)) : events;
+  }
+  // Another tab of this page saved: pick up its changes so this tab doesn't overwrite them.
+  window.addEventListener('storage', e => { if (e.key === KEY) { db = load(); render(); } });
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
   // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
   let hosted = false, lockLive = false, pushTimer;
@@ -480,17 +496,37 @@
   const IDLE_TEXT = {
     starting: '',
     prompt: 'Allow this page to see when your screen is locked, so locked time is taken out of your hours worked.',
-    on: 'Lock tracking is on. Keep this page open (a background tab is fine).',
+    on: 'Lock tracking is on. Keep this page open (a background tab is fine), and stop the browser putting it to sleep: in Edge, Settings → System and performance → "Never put these sites to sleep"; in Chrome, Settings → Performance → "Always keep these sites active". Add this site there.',
     denied: 'Lock tracking is blocked. Click the icon left of the address bar, open Site settings, set "Your device use" to Allow, then reload.',
     unsupported: 'Lock tracking needs Chrome or Edge. Time tracking still works in this browser.'
   };
   let idleState = 'starting';
 
+  // A lock/unlock flip shorter than this is noise (Windows reports a burst of them on wake).
+  const BLIP = 5000;
+  // Heartbeat: it stalls while the browser has paused (frozen / put to sleep) this tab, so a
+  // change that arrives after a long stall happened some time during the stall, not now.
+  const STALL = 90000;
+  let lastBeat = Date.now(), stall = null;
+  setInterval(() => { lastBeat = Date.now(); }, 5000);
+
   function recordScreen(screenState) {
+    const now = Date.now();
+    if (now - lastBeat > STALL) stall = { from: lastBeat, to: now };
+    lastBeat = now;
+    const inStall = stall && now - stall.to < BLIP;
     const type = screenState === 'locked' ? 'Lock' : 'Unlock';
-    const last = db.events.reduce((m, e) => (!m || e.t > m.t ? e : m), null);
+    const last = db.events.reduce((m, e) => (!m || e.t >= m.t ? e : m), null);   // ties: newest added
     if ((last ? last.type : 'Unlock') === type) return;   // also closes a lock left open while the page was shut
-    addItem('lock', type, Date.now());
+    if (last && !last.of && !last.desc && now - last.t < BLIP) {
+      // Lock then Unlock within seconds: drop both. Unlock then Lock again: keep the earlier lock going.
+      db.events = db.events.filter(e => e !== last);
+    } else if (type === 'Lock' && inStall) {
+      // The tab was paused, so the real lock time is unknown: start it when the tab was last awake.
+      addItem('lock', 'Lock', stall.from, 'Approximate start: the browser paused this tab. Check the time.');
+    } else {
+      addItem('lock', type, now);
+    }
     save();
     if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
   }

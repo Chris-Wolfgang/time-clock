@@ -25,6 +25,15 @@ under the address bar. If you clicked Block, open the site icon left of the addr
 only while the page is open; a background tab is fine. Other browsers can use the time clock, but
 without lock tracking.
 
+Browsers put background tabs to sleep to save memory, and a sleeping tab can't see the lock. Add
+this site to the browser's keep-awake list:
+
+- **Edge:** Settings → System and performance → **Never put these sites to sleep** → Add
+- **Chrome:** Settings → Performance → **Always keep these sites active** → Add
+
+If the tab was paused anyway, the lock line starts when the tab was last awake and says
+"Approximate start" so you can correct it. Lock/unlock flips only seconds long are ignored.
+
 ## Where your data lives
 
 Everything is saved in your browser's local storage for this site. Nothing is sent anywhere.
