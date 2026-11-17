@@ -109,6 +109,7 @@
       <button id="backup">Backup</button>
       <button id="restore">Restore…</button>
       <input type="file" id="file" accept=".json" hidden>
+      <button id="diagBtn" title="Download a log of what the browser reported about screen lock, for troubleshooting">Diagnostics</button>
       <button class="danger" id="clear">Clear all data</button>
       <button id="quit" hidden>Stop service</button>
     </div>
@@ -486,11 +487,45 @@
   };
   let idleState = 'starting';
 
+  // Diagnostic log: the raw signals behind lock tracking, kept apart from your entries (not in
+  // Backup, CSV or totals). The Diagnostics button downloads it. Oldest entries roll off.
+  const DIAG_KEY = 'timeClock.diag', DIAG_MAX = 3000, TAB = Math.random().toString(36).slice(2, 7);
+  function diag(what, extra = {}) {
+    try {
+      const log = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+      log.push({ local: new Date().toLocaleString(), t: Date.now(), tab: TAB, what,
+                 vis: document.visibilityState, focus: document.hasFocus(), ...extra });
+      localStorage.setItem(DIAG_KEY, JSON.stringify(log.slice(-DIAG_MAX)));
+    } catch { /* storage full or blocked: skip */ }
+  }
+  // Heartbeat: timers stall while the browser throttles or freezes this tab; log long gaps.
+  let lastBeat = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    if (now - lastBeat > 15000) diag('gap', { ms: now - lastBeat });
+    lastBeat = now;
+  }, 5000);
+  diag('open', { ua: navigator.userAgent });
+  for (const ev of ['visibilitychange', 'freeze', 'resume'])
+    document.addEventListener(ev, () => diag(ev));
+  for (const ev of ['focus', 'blur', 'online', 'offline'])
+    window.addEventListener(ev, () => diag(ev));
+  window.addEventListener('pageshow', e => diag('pageshow', { persisted: e.persisted }));
+  window.addEventListener('pagehide', e => diag('pagehide', { persisted: e.persisted }));
+  window.addEventListener('storage', e => { if (e.key === KEY) diag('otherTabSaved'); });
+  $('diagBtn').onclick = () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([localStorage.getItem(DIAG_KEY) || '[]'], { type: 'application/json' }));
+    a.download = `time-clock-diagnostics-${dayStr(Date.now())}.json`; a.click(); URL.revokeObjectURL(a.href);
+  };
+
   function recordScreen(screenState) {
     const type = screenState === 'locked' ? 'Lock' : 'Unlock';
     const last = db.events.reduce((m, e) => (!m || e.t > m.t ? e : m), null);
-    if ((last ? last.type : 'Unlock') === type) return;   // also closes a lock left open while the page was shut
+    const why = { type, last: last && last.type, lastT: last && last.t, events: db.events.length };
+    if ((last ? last.type : 'Unlock') === type) { diag('same', why); return; }   // also closes a lock left open while the page was shut
     addItem('lock', type, Date.now());
+    diag('add', why);
     save();
     if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
   }
@@ -501,14 +536,20 @@
       const perm = fromClick
         ? await IdleDetector.requestPermission()
         : (await navigator.permissions.query({ name: 'idle-detection' })).state;
+      diag('permission', { perm, fromClick });
       if (perm !== 'granted') { idleState = perm === 'denied' ? 'denied' : 'prompt'; render(); return; }
       const detector = new IdleDetector();
-      detector.addEventListener('change', () => recordScreen(detector.screenState));
+      detector.addEventListener('change', () => {
+        diag('change', { screen: detector.screenState, user: detector.userState, sinceBeat: Date.now() - lastBeat });
+        recordScreen(detector.screenState);
+      });
       await detector.start({ threshold: 60000 });
       idleState = 'on';
+      diag('start', { screen: detector.screenState, user: detector.userState });
       recordScreen(detector.screenState);
       render();
-    } catch {
+    } catch (err) {
+      diag('error', { msg: String(err) });
       idleState = 'denied'; render();
     }
   }
