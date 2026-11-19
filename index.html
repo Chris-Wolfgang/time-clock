@@ -237,11 +237,15 @@
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekFirst(day)); d.setDate(d.getDate() + i);
       const ds = dayStr(d.getTime()), lo = dayStart(ds), hi = dayEnd(ds);
-      const items = pairs.filter(x => x.at >= lo && x.at < hi);
-      if (!items.length) continue;
+      // A row is listed on the day it starts, and again on each later day it runs into (a shift past
+      // midnight), so every day with hours worked has a header and its rows.
+      const carried = x => x.startAt != null && !x.missing && x.startAt < lo && (x.endAt != null || x.kind === 'shift') && (x.endAt ?? now) > lo;
+      const items = pairs.filter(x => (x.at >= lo && x.at < hi) || carried(x));
+      const tot = totalsFor(ds, now);
+      if (!items.length && !(tot.work > 0)) continue;
       any = true;
 
-      const open = expanded.has(ds), tot = totalsFor(ds, now);
+      const open = expanded.has(ds);
       const head = document.createElement('tr'), hc = document.createElement('td');
       head.className = 'dayhead'; hc.colSpan = 6; hc.title = open ? 'Collapse' : 'Expand';
       hc.onclick = () => { open ? expanded.delete(ds) : expanded.add(ds); render(); };
