@@ -144,8 +144,15 @@
   window.addEventListener('storage', e => {
     if (e.key !== KEY) return;
     db = load();
-    if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
+    if (!(document.activeElement && document.activeElement.closest('#rows'))) render(); else staleRows = true;
   });
+  // The rows on screen were built from the old copy; row handlers look their entries up by id, and
+  // the log is redrawn once focus leaves it.
+  let staleRows = false;
+  const current = it => it && ([...db.punches, ...db.events].find(p => (it.id ? p.id === it.id : p === it)) || null);
+  document.getElementById('rows').addEventListener('focusout', () => setTimeout(() => {
+    if (staleRows && !(document.activeElement && document.activeElement.closest('#rows'))) { staleRows = false; render(); }
+  }));
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
   // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
   let hosted = false, lockLive = false, pushTimer;
@@ -347,6 +354,8 @@
     ti.onchange = () => {
       const [h, m, s] = ti.value.split(':').map(Number);
       if (isNaN(h)) { render(); return; }
+      const live = current(item);
+      if (item && !live) { render(); return; }     // deleted in another tab
       const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
       // The box holds a time only. An end at or before its start is on a later day (a shift past
       // midnight); a new start at or after its end is on an earlier day. A start moved past its end
@@ -356,9 +365,9 @@
         if (item) { alert('The start must be before the end.'); render(); return; }
         while (d.getTime() >= x.endAt) d.setDate(d.getDate() - 1);
       }
-      if (item) item.t = d.getTime();
+      if (live) live.t = d.getTime();
       else if (side === 'end') addItem(x.kind, END_TYPE[x.kind], d.getTime(), '', x.start.id);
-      else x.end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id;
+      else { const end = current(x.end); if (!end) { render(); return; } end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id; }
       save(); render();
     };
     td.appendChild(ti);
@@ -377,7 +386,8 @@
     di.type = 'text'; di.placeholder = 'add description';
     di.value = [x.start && x.start.desc, x.end && x.end.desc].filter(Boolean).join(' · ');
     di.onchange = () => {
-      const keep = x.start || x.end, other = x.start ? x.end : null;
+      const keep = current(x.start || x.end), other = x.start ? current(x.end) : null;
+      if (!keep) { render(); return; }     // deleted in another tab
       keep.desc = di.value.trim(); if (other) other.desc = '';
       save();
     };
@@ -387,7 +397,7 @@
     del.className = 'small danger'; del.textContent = '✕'; del.title = 'Delete this row';
     del.onclick = () => {
       if (!confirm(`Delete this ${KIND[x.kind]} row?`)) return;
-      const keep = p => p !== x.start && p !== x.end;
+      const gone = [current(x.start), current(x.end)].filter(Boolean), keep = p => !gone.includes(p);
       db.punches = db.punches.filter(keep); db.events = db.events.filter(keep); save(); render();
     };
     xc.appendChild(del); tr.appendChild(xc);
