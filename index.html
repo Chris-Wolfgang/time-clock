@@ -144,8 +144,15 @@
   window.addEventListener('storage', e => {
     if (e.key !== KEY) return;
     db = load();
-    if (!(document.activeElement && document.activeElement.closest('#rows'))) render();
+    if (!(document.activeElement && document.activeElement.closest('#rows'))) render(); else staleRows = true;
   });
+  // The rows on screen were built from the old copy; row handlers look their entries up by id, and
+  // the log is redrawn once focus leaves it.
+  let staleRows = false;
+  const current = it => it && ([...db.punches, ...db.events].find(p => (it.id ? p.id === it.id : p === it)) || null);
+  document.getElementById('rows').addEventListener('focusout', () => setTimeout(() => {
+    if (staleRows && !(document.activeElement && document.activeElement.closest('#rows'))) { staleRows = false; render(); }
+  }));
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
   // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
   let hosted = false, lockLive = false, pushTimer;
@@ -237,11 +244,15 @@
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekFirst(day)); d.setDate(d.getDate() + i);
       const ds = dayStr(d.getTime()), lo = dayStart(ds), hi = dayEnd(ds);
-      const items = pairs.filter(x => x.at >= lo && x.at < hi);
-      if (!items.length) continue;
+      // A row is listed on the day it starts, and again on each later day it runs into (a shift past
+      // midnight), so every day with hours worked has a header and its rows.
+      const carried = x => x.startAt != null && !x.missing && x.startAt < lo && (x.endAt != null || x.kind === 'shift') && (x.endAt ?? now) > lo;
+      const items = pairs.filter(x => (x.at >= lo && x.at < hi) || carried(x));
+      const tot = totalsFor(ds, now);
+      if (!items.length && !(tot.work > 0)) continue;
       any = true;
 
-      const open = expanded.has(ds), tot = totalsFor(ds, now);
+      const open = expanded.has(ds);
       const head = document.createElement('tr'), hc = document.createElement('td');
       head.className = 'dayhead'; hc.colSpan = 6; hc.title = open ? 'Collapse' : 'Expand';
       hc.onclick = () => { open ? expanded.delete(ds) : expanded.add(ds); render(); };
@@ -343,10 +354,20 @@
     ti.onchange = () => {
       const [h, m, s] = ti.value.split(':').map(Number);
       if (isNaN(h)) { render(); return; }
+      const live = current(item);
+      if (item && !live) { render(); return; }     // deleted in another tab
       const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
-      if (item) item.t = d.getTime();
+      // The box holds a time only. An end at or before its start is on a later day (a shift past
+      // midnight); a new start at or after its end is on an earlier day. A start moved past its end
+      // would re-pair the day, so that is refused.
+      if (side === 'end' && x.startAt != null) while (d.getTime() <= x.startAt) d.setDate(d.getDate() + 1);
+      if (side === 'start' && x.endAt != null && d.getTime() >= x.endAt) {
+        if (item) { alert('The start must be before the end.'); render(); return; }
+        while (d.getTime() >= x.endAt) d.setDate(d.getDate() - 1);
+      }
+      if (live) live.t = d.getTime();
       else if (side === 'end') addItem(x.kind, END_TYPE[x.kind], d.getTime(), '', x.start.id);
-      else x.end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id;
+      else { const end = current(x.end); if (!end) { render(); return; } end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id; }
       save(); render();
     };
     td.appendChild(ti);
@@ -365,7 +386,8 @@
     di.type = 'text'; di.placeholder = 'add description';
     di.value = [x.start && x.start.desc, x.end && x.end.desc].filter(Boolean).join(' · ');
     di.onchange = () => {
-      const keep = x.start || x.end, other = x.start ? x.end : null;
+      const keep = current(x.start || x.end), other = x.start ? current(x.end) : null;
+      if (!keep) { render(); return; }     // deleted in another tab
       keep.desc = di.value.trim(); if (other) other.desc = '';
       save();
     };
@@ -375,7 +397,7 @@
     del.className = 'small danger'; del.textContent = '✕'; del.title = 'Delete this row';
     del.onclick = () => {
       if (!confirm(`Delete this ${KIND[x.kind]} row?`)) return;
-      const keep = p => p !== x.start && p !== x.end;
+      const gone = [current(x.start), current(x.end)].filter(Boolean), keep = p => !gone.includes(p);
       db.punches = db.punches.filter(keep); db.events = db.events.filter(keep); save(); render();
     };
     xc.appendChild(del); tr.appendChild(xc);
@@ -447,9 +469,12 @@
   $('prev').onclick = () => shift(-1); $('next').onclick = () => shift(1); $('day').onchange = () => { ensureDay(); render(); };
 
   $('export').onclick = () => {
-    const q = s => `"${String(s).replace(/"/g, '""')}"`;
+    // A leading ' keeps spreadsheets from reading a description such as "=sum" as a formula.
+    const q = s => `"${String(s).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
     const lines = ['timestamp,event,description'];
-    sorted().forEach(p => lines.push([new Date(p.t).toISOString(), LABEL[p.type], q(p.desc || '')].join(',')));
+    // Lock/Unlock lines too, since they are taken out of the hours worked.
+    [...db.punches, ...db.events].sort((a, b) => a.t - b.t)
+      .forEach(p => lines.push([new Date(p.t).toISOString(), LABEL[p.type] || p.type, q(p.desc || '')].join(',')));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' }));
     a.download = `time-clock-${dayStr(Date.now())}.csv`; a.click(); URL.revokeObjectURL(a.href);
@@ -472,15 +497,32 @@
     a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
     a.download = `time-clock-backup-${dayStr(Date.now())}.json`; a.click(); URL.revokeObjectURL(a.href);
   };
+  // Copies of backup entries, or null if any entry is not an object with a known type and a numeric
+  // time. Entries without an id get one, so edits and links work on them.
+  function cleanEntries(list, types) {
+    const out = [];
+    for (const e of list) {
+      if (!e || typeof e !== 'object' || !types.includes(e.type) || !Number.isFinite(e.t)) return null;
+      const item = { ...e, id: e.id || newId(), desc: typeof e.desc === 'string' ? e.desc : '' };
+      out.push(item);
+    }
+    return out;
+  }
   $('restore').onclick = () => $('file').click();
   $('file').onchange = async ev => {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
     let data;
     try { data = JSON.parse(await f.text()); } catch { alert('That file is not a Time Clock backup.'); return; }
     if (!data || !Array.isArray(data.punches)) { alert('That file is not a Time Clock backup.'); return; }
-    if (!confirm(`Replace all current data with this backup (${data.punches.length} entries)?`)) return;
-    db = { punches: data.punches, events: hosted ? db.events : (Array.isArray(data.events) ? data.events : []),
-           settings: Object.assign({ target: 40, weekStart: 1 }, data.settings) };
+    const punches = cleanEntries(data.punches, Object.keys(LABEL));
+    const events = Array.isArray(data.events) ? cleanEntries(data.events, ['Lock', 'Unlock']) : [];
+    if (!punches || !events) { alert('That backup has entries this page cannot read, so nothing was restored.'); return; }
+    if (!confirm(`Replace all current data with this backup (${punches.length} entries)?`)) return;
+    const s = Object.assign({}, data.settings), target = Number(s.target);
+    // In service mode the lock events stay as they are, and so does lockSync, so lock rows the user
+    // deleted or edited are not imported again from the service's log.
+    db = { punches, events: hosted ? db.events : events, lockSync: db.lockSync,
+           settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 } };
     $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
     save(); render();
   };
@@ -610,7 +652,12 @@
     lockLive = false; render();
   };
 
-  $('clear').onclick = () => { if (confirm('Delete all entries and lock events?')) { db = { punches: [], events: [], settings: db.settings }; save(); render(); } };
+  // In service mode, move lockSync to now so the service's log of past lock events is not imported again.
+  $('clear').onclick = () => {
+    if (!confirm('Delete all entries and lock events?')) return;
+    db = { punches: [], events: [], lockSync: hosted ? Date.now() : db.lockSync, settings: db.settings };
+    save(); render();
+  };
 
   $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
   $('target').onchange = () => { db.settings.target = Math.max(0, parseFloat($('target').value) || 0); save(); render(); };
