@@ -344,6 +344,14 @@
       const [h, m, s] = ti.value.split(':').map(Number);
       if (isNaN(h)) { render(); return; }
       const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
+      // The box holds a time only. An end at or before its start is on a later day (a shift past
+      // midnight); a new start at or after its end is on an earlier day. A start moved past its end
+      // would re-pair the day, so that is refused.
+      if (side === 'end' && x.startAt != null) while (d.getTime() <= x.startAt) d.setDate(d.getDate() + 1);
+      if (side === 'start' && x.endAt != null && d.getTime() >= x.endAt) {
+        if (item) { alert('The start must be before the end.'); render(); return; }
+        while (d.getTime() >= x.endAt) d.setDate(d.getDate() - 1);
+      }
       if (item) item.t = d.getTime();
       else if (side === 'end') addItem(x.kind, END_TYPE[x.kind], d.getTime(), '', x.start.id);
       else x.end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id;
