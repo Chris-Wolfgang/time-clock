@@ -447,9 +447,12 @@
   $('prev').onclick = () => shift(-1); $('next').onclick = () => shift(1); $('day').onchange = () => { ensureDay(); render(); };
 
   $('export').onclick = () => {
-    const q = s => `"${String(s).replace(/"/g, '""')}"`;
+    // A leading ' keeps spreadsheets from reading a description such as "=sum" as a formula.
+    const q = s => `"${String(s).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
     const lines = ['timestamp,event,description'];
-    sorted().forEach(p => lines.push([new Date(p.t).toISOString(), LABEL[p.type], q(p.desc || '')].join(',')));
+    // Lock/Unlock lines too, since they are taken out of the hours worked.
+    [...db.punches, ...db.events].sort((a, b) => a.t - b.t)
+      .forEach(p => lines.push([new Date(p.t).toISOString(), LABEL[p.type] || p.type, q(p.desc || '')].join(',')));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' }));
     a.download = `time-clock-${dayStr(Date.now())}.csv`; a.click(); URL.revokeObjectURL(a.href);
