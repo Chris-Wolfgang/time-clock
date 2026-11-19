@@ -479,8 +479,10 @@
     try { data = JSON.parse(await f.text()); } catch { alert('That file is not a Time Clock backup.'); return; }
     if (!data || !Array.isArray(data.punches)) { alert('That file is not a Time Clock backup.'); return; }
     if (!confirm(`Replace all current data with this backup (${data.punches.length} entries)?`)) return;
+    // In service mode the lock events stay as they are, and so does lockSync, so lock rows the user
+    // deleted or edited are not imported again from the service's log.
     db = { punches: data.punches, events: hosted ? db.events : (Array.isArray(data.events) ? data.events : []),
-           settings: Object.assign({ target: 40, weekStart: 1 }, data.settings) };
+           lockSync: db.lockSync, settings: Object.assign({ target: 40, weekStart: 1 }, data.settings) };
     $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
     save(); render();
   };
@@ -610,7 +612,12 @@
     lockLive = false; render();
   };
 
-  $('clear').onclick = () => { if (confirm('Delete all entries and lock events?')) { db = { punches: [], events: [], settings: db.settings }; save(); render(); } };
+  // In service mode, move lockSync to now so the service's log of past lock events is not imported again.
+  $('clear').onclick = () => {
+    if (!confirm('Delete all entries and lock events?')) return;
+    db = { punches: [], events: [], lockSync: hosted ? Date.now() : db.lockSync, settings: db.settings };
+    save(); render();
+  };
 
   $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
   $('target').onchange = () => { db.settings.target = Math.max(0, parseFloat($('target').value) || 0); save(); render(); };
