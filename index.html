@@ -70,7 +70,7 @@
     <div class="row" style="justify-content:space-between; margin-bottom:8px">
       <div class="row">
         <button id="prev" title="Previous week">&larr;</button>
-        <input type="date" id="day" title="Any date in the week">
+        <input type="date" id="day" title="Any date in the week" required>
         <button id="next" title="Next week">&rarr;</button>
         <h2 style="margin:0 0 0 8px" id="weekTitle">Week</h2>
       </div>
@@ -441,8 +441,10 @@
     save(); render();
   };
 
-  const shift = n => { const d = new Date(dayStart($('day').value)); d.setDate(d.getDate() + 7 * n); $('day').value = dayStr(d.getTime()); render(); };
-  $('prev').onclick = () => shift(-1); $('next').onclick = () => shift(1); $('day').onchange = render;
+  // A cleared date box means today, so the week view and the arrows always have a date to work from.
+  const ensureDay = () => { if (!$('day').value) $('day').value = dayStr(Date.now()); };
+  const shift = n => { ensureDay(); const d = new Date(dayStart($('day').value)); d.setDate(d.getDate() + 7 * n); $('day').value = dayStr(d.getTime()); render(); };
+  $('prev').onclick = () => shift(-1); $('next').onclick = () => shift(1); $('day').onchange = () => { ensureDay(); render(); };
 
   $('export').onclick = () => {
     const q = s => `"${String(s).replace(/"/g, '""')}"`;
