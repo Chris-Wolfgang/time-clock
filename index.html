@@ -472,17 +472,32 @@
     a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' }));
     a.download = `time-clock-backup-${dayStr(Date.now())}.json`; a.click(); URL.revokeObjectURL(a.href);
   };
+  // Copies of backup entries, or null if any entry is not an object with a known type and a numeric
+  // time. Entries without an id get one, so edits and links work on them.
+  function cleanEntries(list, types) {
+    const out = [];
+    for (const e of list) {
+      if (!e || typeof e !== 'object' || !types.includes(e.type) || !Number.isFinite(e.t)) return null;
+      const item = { ...e, id: e.id || newId(), desc: typeof e.desc === 'string' ? e.desc : '' };
+      out.push(item);
+    }
+    return out;
+  }
   $('restore').onclick = () => $('file').click();
   $('file').onchange = async ev => {
     const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
     let data;
     try { data = JSON.parse(await f.text()); } catch { alert('That file is not a Time Clock backup.'); return; }
     if (!data || !Array.isArray(data.punches)) { alert('That file is not a Time Clock backup.'); return; }
-    if (!confirm(`Replace all current data with this backup (${data.punches.length} entries)?`)) return;
+    const punches = cleanEntries(data.punches, Object.keys(LABEL));
+    const events = Array.isArray(data.events) ? cleanEntries(data.events, ['Lock', 'Unlock']) : [];
+    if (!punches || !events) { alert('That backup has entries this page cannot read, so nothing was restored.'); return; }
+    if (!confirm(`Replace all current data with this backup (${punches.length} entries)?`)) return;
+    const s = Object.assign({}, data.settings), target = Number(s.target);
     // In service mode the lock events stay as they are, and so does lockSync, so lock rows the user
     // deleted or edited are not imported again from the service's log.
-    db = { punches: data.punches, events: hosted ? db.events : (Array.isArray(data.events) ? data.events : []),
-           lockSync: db.lockSync, settings: Object.assign({ target: 40, weekStart: 1 }, data.settings) };
+    db = { punches, events: hosted ? db.events : events, lockSync: db.lockSync,
+           settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 } };
     $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
     save(); render();
   };
