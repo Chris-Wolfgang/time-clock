@@ -117,6 +117,7 @@
       <button class="primary" id="lockBtn" hidden>Enable lock tracking</button>
       <span class="muted" id="lockInfo"></span>
     </div>
+    <p id="dataWarn" role="alert" style="color:var(--danger); font-weight:600" hidden></p>
     <p class="muted" id="storeInfo" style="margin-bottom:0"></p>
   </div>
 </main>
@@ -130,14 +131,40 @@
   const ALLOWED = { out:['In'], work:['MealStart','BreakStart','Out'], meal:['MealEnd','Out'], break:['BreakEnd','Out'] };
   const STATE_TEXT = { out:'Clocked out', work:'Working', meal:'On meal', break:'On break' };
 
+  // Problems shown under the Data card: entries set aside on load, or saves that failed.
+  let loadNote = '', saveFailed = false;
   let db = load();
+  // Reads the saved data. Entries the page cannot use (no known type, no numeric time) would stop it
+  // rendering at all, so they are left out; the saved text is first copied to KEY + '.unreadable' so
+  // nothing is lost, and a note says so.
   function load() {
-    const base = { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
-    try {
-      const saved = JSON.parse(localStorage.getItem(KEY)) || {};
-      return Object.assign(base, saved, { settings: Object.assign(base.settings, saved.settings) });
+    let raw = null, saved = null, dropped = 0;
+    try { raw = localStorage.getItem(KEY); } catch { /* storage blocked */ }
+    if (raw == null) return { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
+    try { saved = JSON.parse(raw); } catch { /* not JSON */ }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { dropped++; saved = {}; }
+    const keep = (list, types) => {
+      if (!Array.isArray(list)) { if (list != null) dropped++; return []; }
+      const out = [];
+      for (const e of list) {
+        if (!e || typeof e !== 'object' || !types.includes(e.type) || !Number.isFinite(e.t)) { dropped++; continue; }
+        out.push({ ...e, id: e.id ? String(e.id) : String(Date.now()) + Math.random(), desc: typeof e.desc === 'string' ? e.desc : '' });
+      }
+      return out;
+    };
+    const s = Object.assign({}, saved.settings), target = Number(s.target);
+    const data = {
+      punches: keep(saved.punches, Object.keys(LABEL)),
+      events: keep(saved.events, ['Lock', 'Unlock']),
+      settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 }
+    };
+    if (Number.isFinite(saved.lockSync)) data.lockSync = saved.lockSync;
+    if (dropped) {
+      try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
+      loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
+                 `A copy of the original is kept in this browser under "${KEY}.unreadable".`;
     }
-    catch { return base; }
+    return data;
   }
   // Each tab holds its own copy of the data and saves all of it, so a second open tab would
   // overwrite this one's changes. When another tab saves, take its copy.
@@ -159,7 +186,14 @@
   const API_HEADERS = { 'X-TimeClock': '1' };
 
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* storage unavailable */ }
+    // A failed save would leave changes only in memory, lost on reload, so say so on the page. If
+    // storage is full, the diagnostic log (which shares the quota) goes first.
+    const text = JSON.stringify(db);
+    try { localStorage.setItem(KEY, text); saveFailed = false; }
+    catch {
+      try { localStorage.removeItem('timeClock.diag'); localStorage.setItem(KEY, text); saveFailed = false; }
+      catch { saveFailed = !hosted; }     // in service mode the file is the real copy
+    }
     if (hosted) pushData();
   }
   function pushData() {
@@ -270,6 +304,9 @@
     $('lockInfo').textContent = hosted
       ? (lockLive ? 'Lock tracking is on (Time Clock service).' : 'Lock tracking is offline: the Time Clock service is not responding.')
       : IDLE_TEXT[idleState];
+    const warn = [saveFailed && 'Your last change could not be saved in this browser (storage is full or blocked). ' +
+                  'It will be lost when this page closes. Click Backup now.', loadNote].filter(Boolean).join(' ');
+    $('dataWarn').textContent = warn; $('dataWarn').hidden = !warn;
     $('storeInfo').textContent = (hosted
       ? 'Data is stored in %LOCALAPPDATA%\\TimeClock.'
       : 'Data is stored in this browser only. Use Backup now and then, and Restore to move it to another browser or PC.');
