@@ -589,11 +589,13 @@
       localStorage.setItem(DIAG_KEY, JSON.stringify(log.slice(-DIAG_MAX)));
     } catch { /* storage full or blocked: skip */ }
   }
-  // Heartbeat: timers stall while the browser throttles or freezes this tab; log long gaps.
+  // Heartbeat: timers stall while the browser throttles or freezes this tab; log long gaps. Over
+  // 90 s, because Chrome can run a background tab's timers only once a minute, and logging every
+  // such wake would roll the useful entries out of the log within a day or two.
   let lastBeat = Date.now();
   setInterval(() => {
     const now = Date.now();
-    if (now - lastBeat > 15000) diag('gap', { ms: now - lastBeat });
+    if (now - lastBeat > 90000) diag('gap', { ms: now - lastBeat });
     lastBeat = now;
   }, 5000);
   diag('open', { ua: navigator.userAgent });
@@ -612,7 +614,7 @@
 
   function recordScreen(screenState) {
     const type = screenState === 'locked' ? 'Lock' : 'Unlock';
-    const last = db.events.reduce((m, e) => (!m || e.t > m.t ? e : m), null);
+    const last = db.events.reduce((m, e) => (!m || e.t >= m.t ? e : m), null);   // ties: the one added last
     const why = { type, last: last && last.type, lastT: last && last.t, events: db.events.length };
     if ((last ? last.type : 'Unlock') === type) { diag('same', why); return; }   // also closes a lock left open while the page was shut
     addItem('lock', type, Date.now());
