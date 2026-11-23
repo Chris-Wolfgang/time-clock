@@ -159,6 +159,7 @@
       settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 }
     };
     if (Number.isFinite(saved.lockSync)) data.lockSync = saved.lockSync;
+    if (Number.isFinite(saved.savedAt)) data.savedAt = saved.savedAt;
     if (dropped) {
       try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
       loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
@@ -181,11 +182,15 @@
     if (staleRows && !(document.activeElement && document.activeElement.closest('#rows'))) { staleRows = false; render(); }
   }));
   // Hosted mode: served by time-clock.ps1, which stores data in a file and logs lock/unlock.
-  // Otherwise (opened as a plain file) data lives in localStorage and lock logs are imported by hand.
+  // Otherwise data lives in localStorage and lock tracking uses the browser's Idle Detection API.
   let hosted = false, lockLive = false, pushTimer;
-  const API_HEADERS = { 'X-TimeClock': '1' };
+  // The service only answers requests carrying its per-user key, which time-clock.cmd puts in the address.
+  const API_HEADERS = { 'X-TimeClock': new URLSearchParams(location.search).get('k') || '' };
+  // While the page asks the service for its data, punches would be overwritten by the reply: hold them.
+  let connecting = location.hostname === 'localhost' && location.port === '47653';
 
   function save() {
+    db.savedAt = Date.now();      // lets connect() tell whether this copy or the service's is newer
     // A failed save would leave changes only in memory, lost on reload, so say so on the page. If
     // storage is full, the diagnostic log (which shares the quota) goes first.
     const text = JSON.stringify(db);
@@ -200,7 +205,7 @@
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
       fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' }, keepalive: true,
-        body: JSON.stringify({ punches: db.punches, events: db.events, lockSync: db.lockSync, settings: db.settings }) })
+        body: JSON.stringify({ punches: db.punches, events: db.events, lockSync: db.lockSync, settings: db.settings, savedAt: db.savedAt }) })
         .then(r => { if (!r.ok) throw new Error(); })
         .catch(() => alert('Could not save to the Time Clock service. Is it still running?'));
     }, 150);
@@ -265,7 +270,7 @@
 
     $('state').textContent = STATE_TEXT[state]; $('state').className = 'state ' + state;
     $('since').textContent = last && state !== 'out' ? `since ${showTime(last.t)}` : '';
-    for (const type of Object.keys(LABEL)) $('b-' + type).disabled = !ALLOWED[state].includes(type);
+    for (const type of Object.keys(LABEL)) $('b-' + type).disabled = connecting || !ALLOWED[state].includes(type);
 
     $('clock').textContent = fmtDur(totalsFor(dayStr(now), now).work);
     renderWeek(day, now);
@@ -667,25 +672,30 @@
 
   // Detect the Time Clock service; fall back to plain browser storage if it isn't there.
   async function connect() {
-    if (location.hostname !== 'localhost' || location.port !== '47653') return;
+    if (!connecting) return;
     try {
       const r = await fetch('/api/data', { headers: API_HEADERS });
       if (!r.ok) return;
       const remote = await r.json();
       hosted = true;
-      if (remote.punches && remote.punches.length) {
+      // This browser's copy is newer when changes were made while the service was down (their
+      // pushes failed): keep it and send it, rather than letting the older file overwrite it.
+      const localNewer = (db.savedAt || 0) > (Number(remote.savedAt) || 0);
+      if (remote.punches && remote.punches.length && !localNewer) {
         db.punches = remote.punches;
         db.events = remote.events || [];
         db.lockSync = remote.lockSync || 0;
         db.settings = Object.assign(db.settings, remote.settings);
-      } else if (db.punches.length) {
-        pushData();                 // first run: move this browser's data into the file
+        db.savedAt = Number(remote.savedAt) || 0;
+      } else if (db.punches.length || db.events.length) {
+        pushData();                 // first run, or newer here: move this browser's data into the file
       }
       $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
       await pollEvents();
       setInterval(pollEvents, 5000);
       render();
     } catch { /* not served by the service */ }
+    finally { connecting = false; render(); }
   }
 
   $('quit').onclick = async () => {

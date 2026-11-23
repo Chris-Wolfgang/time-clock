@@ -50,3 +50,8 @@ Everything is saved in your browser's local storage for this site. Nothing is se
 unlock even while the page is closed, and stores data in `%LOCALAPPDATA%\TimeClock`. It needs no
 admin rights. To use it, download `index.html`, `time-clock.ps1` and `time-clock.cmd` into one
 folder and double-click `time-clock.cmd`.
+
+The page opens at an address ending in `?k=` and a key that belongs to your Windows account (kept
+in `%LOCALAPPDATA%\TimeClock\token`). Without the key the page and its data are refused, so other
+users and programs on the PC can't read your entries through the port. Bookmark the address it
+opens, or just run `time-clock.cmd` again.
