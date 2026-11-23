@@ -352,8 +352,10 @@
     else if (!item && (side === 'start' || x.missing)) { ti.className = 'missing'; ti.title = `No ${side} recorded. Enter one.`; }
     else if (!item) ti.title = 'Still running. Enter a time to end it.';
     ti.onchange = () => {
+      // An emptied or half-typed box is not a time ("".split gives [0], which would pass as midnight
+      // and save an invalid date): put the old value back.
       const [h, m, s] = ti.value.split(':').map(Number);
-      if (isNaN(h)) { render(); return; }
+      if (!/^\d{2}:\d{2}(:\d{2})?$/.test(ti.value) || !Number.isFinite(h) || !Number.isFinite(m)) { render(); return; }
       const live = current(item);
       if (item && !live) { render(); return; }     // deleted in another tab
       const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
@@ -365,6 +367,7 @@
         if (item) { alert('The start must be before the end.'); render(); return; }
         while (d.getTime() >= x.endAt) d.setDate(d.getDate() - 1);
       }
+      if (!Number.isFinite(d.getTime())) { render(); return; }
       if (live) live.t = d.getTime();
       else if (side === 'end') addItem(x.kind, END_TYPE[x.kind], d.getTime(), '', x.start.id);
       else { const end = current(x.end); if (!end) { render(); return; } end.of = addItem(x.kind, START_TYPE[x.kind], d.getTime()).id; }
