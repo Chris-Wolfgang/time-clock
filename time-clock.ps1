@@ -12,9 +12,25 @@ $logFile  = Join-Path $dir 'lock-events.csv'
 
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
+# A per-user key, kept in this user's own folder. The page is served, and the API answers, only to
+# requests that carry it, so another user or program on this PC cannot read or change the data
+# through the port, and on a shared PC this user never opens someone else's instance.
+$tokenFile = Join-Path $dir 'token'
+if (-not (Test-Path $tokenFile))
+{
+    [IO.File]::WriteAllText($tokenFile, [guid]::NewGuid().ToString('N'))
+}
+$token   = ([IO.File]::ReadAllText($tokenFile)).Trim()
+$openUrl = "$($url)?k=$token"
+
+function Write-ErrorLog([string]$message)
+{
+    try { Add-Content -Path (Join-Path $dir 'error.log') -Value ('{0}  {1}' -f (Get-Date).ToString('o'), $message) } catch { }
+}
+
 function Show-Error([string]$message)
 {
-    Add-Content -Path (Join-Path $dir 'error.log') -Value ('{0}  {1}' -f (Get-Date).ToString('o'), $message)
+    Write-ErrorLog $message
     (New-Object -ComObject WScript.Shell).Popup($message, 0, 'Time Clock', 16) | Out-Null
 }
 
@@ -28,7 +44,7 @@ catch
 {
     if ($_.Exception.InnerException -and $_.Exception.InnerException.ErrorCode -eq 183)
     {
-        Start-Process $url      # already running: just open the page
+        Start-Process $openUrl  # already running: just open the page (refused if it isn't this user's)
         exit 0
     }
     Show-Error ("Could not start the local service on port $port.`n" + $_.Exception.Message)
@@ -46,9 +62,34 @@ $map = @{
     SessionLogon      = 'Unlock'
 }
 
-function Write-LockEvent([string]$type, [string]$reason)
+# Lock events wait here until written, so a failed write (the CSV open in Excel, say) is retried
+# on the next loop instead of stopping the service.
+$pending = New-Object System.Collections.Generic.List[string]
+$script:writeFailing = $false
+
+function Write-LockEvent([string]$type, [string]$reason, [datetime]$time = (Get-Date))
 {
-    Add-Content -Path $logFile -Value ('{0},{1},{2}' -f (Get-Date).ToString('o'), $type, $reason) -Encoding UTF8
+    $pending.Add(('{0},{1},{2}' -f $time.ToString('o'), $type, $reason))
+    Save-LockEvents
+}
+
+function Save-LockEvents
+{
+    if ($pending.Count -eq 0) { return }
+    try
+    {
+        Add-Content -Path $logFile -Value $pending.ToArray() -Encoding UTF8
+        $pending.Clear()
+        $script:writeFailing = $false
+    }
+    catch
+    {
+        if (-not $script:writeFailing)        # log once per outage, not every second
+        {
+            Write-ErrorLog ("Could not write $logFile, will keep retrying: " + $_.Exception.Message)
+            $script:writeFailing = $true
+        }
+    }
 }
 
 # If the last logged event was a lock (we weren't running at the unlock), close it now so the
@@ -77,7 +118,7 @@ function Send-Text($ctx, [int]$status, [string]$text, [string]$type = 'text/plai
     Send-Response $ctx $status ([Text.Encoding]::UTF8.GetBytes($text)) $type
 }
 
-Start-Process $url
+Start-Process $openUrl
 $running = $true
 
 try
@@ -94,9 +135,10 @@ try
                 Remove-Event -EventIdentifier $e.EventIdentifier
                 if ($map.ContainsKey($reason))
                 {
-                    Write-LockEvent $map[$reason] $reason
+                    Write-LockEvent $map[$reason] $reason $e.TimeGenerated   # when it happened, not now
                 }
             }
+            Save-LockEvents
         }
 
         $ctx = $task.Result
@@ -105,17 +147,25 @@ try
             $req = $ctx.Request
             $path = $req.Url.AbsolutePath
 
-            # Reject DNS-rebinding (wrong Host) and cross-site calls (API needs a custom header,
-            # which a foreign page cannot send without a CORS preflight we never answer).
+            # Reject DNS-rebinding (wrong Host) and cross-site calls (the API needs the key in a
+            # custom header, which a foreign page cannot send without a CORS preflight we never
+            # answer). The page itself needs the key in the address, as time-clock.cmd opens it.
             if ($req.Headers['Host'] -ne "localhost:$port")
             {
                 Send-Text $ctx 403 'Forbidden'
             }
             elseif ($path -eq '/' -or $path -eq '/index.html')
             {
-                Send-Response $ctx 200 ([IO.File]::ReadAllBytes($page)) 'text/html; charset=utf-8'
+                if ($req.QueryString['k'] -ceq $token)
+                {
+                    Send-Response $ctx 200 ([IO.File]::ReadAllBytes($page)) 'text/html; charset=utf-8'
+                }
+                else
+                {
+                    Send-Text $ctx 403 'This address is missing its key, or the Time Clock running here belongs to another user. Start it with time-clock.cmd.'
+                }
             }
-            elseif ($path.StartsWith('/api/') -and $req.Headers['X-TimeClock'] -ne '1')
+            elseif ($path.StartsWith('/api/') -and $req.Headers['X-TimeClock'] -cne $token)
             {
                 Send-Text $ctx 403 'Forbidden'
             }
