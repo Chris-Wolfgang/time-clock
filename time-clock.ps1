@@ -66,9 +66,15 @@ $map = @{
 # on the next loop instead of stopping the service.
 $pending = New-Object System.Collections.Generic.List[string]
 $script:writeFailing = $false
+# One absence can raise several events of the same kind (SessionLock then ConsoleDisconnect when
+# switching users, ConsoleConnect then SessionUnlock on return). The page would show each repeat
+# as a row with a missing time, so only a change of type is logged, as the page does in browser mode.
+$script:lastType = 'Unlock'
 
 function Write-LockEvent([string]$type, [string]$reason, [datetime]$time = (Get-Date))
 {
+    if ($type -eq $script:lastType) { return }
+    $script:lastType = $type
     $pending.Add(('{0},{1},{2}' -f $time.ToString('o'), $type, $reason))
     Save-LockEvents
 }
@@ -99,6 +105,7 @@ if (Test-Path $logFile)
     $last = Get-Content -Path $logFile -Tail 1
     if ($last -and $last.Split(',')[1] -eq 'Lock')
     {
+        $script:lastType = 'Lock'
         Write-LockEvent 'Unlock' 'ServiceStart'
     }
 }
