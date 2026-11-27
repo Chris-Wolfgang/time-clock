@@ -403,10 +403,13 @@
       if (!/^\d{2}:\d{2}(:\d{2})?$/.test(ti.value) || !Number.isFinite(h) || !Number.isFinite(m)) { render(); return; }
       const live = current(item);
       if (item && !live) { render(); return; }     // deleted in another tab
-      const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
-      // The box holds a time only. An end at or before its start is on a later day (a shift past
-      // midnight); a new start at or after its end is on an earlier day. A start moved past its end
-      // would re-pair the day, so that is refused.
+      // An end with a known start is placed from the start's date, not its own: an end already rolled
+      // to the next day would otherwise stay there when corrected (09:00 to 17:00 reading 32 hours).
+      const base = side === 'end' && x.startAt != null ? x.startAt : item ? item.t : (x.startAt ?? x.endAt);
+      const d = new Date(base); d.setHours(h, m, s || 0, 0);
+      // The box holds a time only. An end lands on the first such time after its start (a later day
+      // for a shift past midnight); a new start at or after its end is on an earlier day. A start
+      // moved past its end would re-pair the day, so that is refused.
       if (side === 'end' && x.startAt != null) while (d.getTime() <= x.startAt) d.setDate(d.getDate() + 1);
       if (side === 'start' && x.endAt != null && d.getTime() >= x.endAt) {
         if (item) { alert('The start must be before the end.'); render(); return; }
