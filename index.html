@@ -41,6 +41,7 @@
   #rows tr:not(.dayhead) td { white-space:nowrap; }
   #rows tr:not(.dayhead) td:first-child { padding-left:28px; }
   .dayhead .worked { float:right; font-weight:600; }
+  .dayhead button { background:none; border:0; border-radius:4px; padding:0; font-weight:700; }
   .stats { display:flex; gap:20px; flex-wrap:wrap; margin-top:8px; }
   .stats b { display:block; font-size:18px; font-variant-numeric:tabular-nums; }
 </style>
@@ -54,7 +55,7 @@
     <div class="clock" id="clock">00:00:00</div>
     <div><span class="state" id="state">Clocked out</span> <span class="muted" id="since"></span></div>
     <div class="row" style="margin-top:12px">
-      <input type="text" id="desc" placeholder="Description (optional) — applied to the next button you press" autocomplete="off">
+      <input type="text" id="desc" aria-label="Description for the next punch" placeholder="Description (optional) — applied to the next button you press" autocomplete="off">
     </div>
     <div class="grid">
       <button class="primary" id="b-In">Clock In</button>
@@ -304,8 +305,14 @@
       const open = expanded.has(ds);
       const head = document.createElement('tr'), hc = document.createElement('td');
       head.className = 'dayhead'; hc.colSpan = 6; hc.title = open ? 'Collapse' : 'Expand';
-      hc.onclick = () => { open ? expanded.delete(ds) : expanded.add(ds); render(); };
-      const title = document.createElement('strong');
+      // The whole header toggles on a click; the day name is a real button, so the keyboard and
+      // screen readers can reach it too (its click bubbles to this handler). Focus stays on it.
+      hc.onclick = () => {
+        open ? expanded.delete(ds) : expanded.add(ds); render();
+        const again = document.querySelector(`#rows button[data-day="${ds}"]`); if (again) again.focus();
+      };
+      const title = document.createElement('button');
+      title.type = 'button'; title.dataset.day = ds; title.setAttribute('aria-expanded', String(open));
       title.textContent = `${open ? '▾' : '▸'} ${d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}`;
       const worked = document.createElement('span'); worked.className = 'worked'; worked.textContent = `${fmtDur(tot.work)} worked (${hours(tot.work)} h)`;
       hc.append(title, worked); head.appendChild(hc); tbody.appendChild(head);
@@ -398,7 +405,7 @@
   function timeCell(x, side) {
     const item = x[side], td = document.createElement('td'), ti = document.createElement('input');
     const implied = !item && side === 'end' && x.implicit && !x.missing;
-    ti.type = 'time'; ti.step = 1;
+    ti.type = 'time'; ti.step = 1; ti.setAttribute('aria-label', `${KIND[x.kind]} ${side}`);
     ti.value = item ? fmtTime(item.t) : implied ? fmtTime(x.endAt) : '';
     if (implied) { ti.className = 'implied'; ti.title = 'Ended by Clock Out. Change it to record a separate end.'; }
     else if (!item && (side === 'start' || x.missing)) { ti.className = 'missing'; ti.title = `No ${side} recorded. Enter one.`; }
@@ -441,7 +448,7 @@
     cell(tr, x.startAt == null || x.missing ? '' : fmtDur((x.endAt ?? now) - x.startAt) + (x.endAt == null ? '…' : ''), 'muted');
 
     const dc = document.createElement('td'), di = document.createElement('input');
-    di.type = 'text'; di.placeholder = 'add description';
+    di.type = 'text'; di.placeholder = 'add description'; di.setAttribute('aria-label', `${KIND[x.kind]} description`);
     di.value = [x.start && x.start.desc, x.end && x.end.desc].filter(Boolean).join(' · ');
     di.onchange = () => {
       const keep = current(x.start || x.end), other = x.start ? current(x.end) : null;
@@ -453,6 +460,7 @@
 
     const xc = document.createElement('td'), del = document.createElement('button');
     del.className = 'small danger'; del.textContent = '✕'; del.title = 'Delete this row';
+    del.setAttribute('aria-label', `Delete ${KIND[x.kind]} row` + (x.at != null ? ` at ${showTime(x.at)}` : ''));
     del.onclick = () => {
       if (!confirm(`Delete this ${KIND[x.kind]} row?`)) return;
       const gone = [current(x.start), current(x.end)].filter(Boolean), keep = p => !gone.includes(p);
