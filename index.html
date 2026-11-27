@@ -710,7 +710,10 @@
       const localNewer = (db.savedAt || 0) > (remote.savedAt || 0);
       if (unreadable) {
         /* keep this browser's copy, send nothing yet */
-      } else if (remote.punches.length && !localNewer) {
+      } else if ((remote.savedAt != null || remote.punches.length) && !localNewer) {
+        // A file the page saved (it has savedAt) is taken whenever it is not older, even with no
+        // punches: it may have been cleared from another browser, and its events, lockSync and
+        // settings count too. Only an empty file ({}, first run) gets this browser's data.
         db.punches = remote.punches;
         db.events = remote.events;
         db.lockSync = remote.lockSync || 0;
