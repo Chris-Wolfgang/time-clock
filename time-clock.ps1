@@ -105,6 +105,21 @@ if (Test-Path $logFile)
 
 Register-ObjectEvent -InputObject ([Microsoft.Win32.SystemEvents]) -EventName SessionSwitch -SourceIdentifier TimeClockSession | Out-Null
 
+# Logs every queued session event without blocking, then retries any write still pending.
+function Read-SessionEvents
+{
+    foreach ($e in @(Get-Event -SourceIdentifier TimeClockSession -ErrorAction SilentlyContinue))
+    {
+        $reason = [string]$e.SourceEventArgs.Reason
+        Remove-Event -EventIdentifier $e.EventIdentifier
+        if ($map.ContainsKey($reason))
+        {
+            Write-LockEvent $map[$reason] $reason $e.TimeGenerated   # when it happened, not now
+        }
+    }
+    Save-LockEvents
+}
+
 function Send-Response($ctx, [int]$status, [byte[]]$bytes, [string]$type)
 {
     $ctx.Response.StatusCode = $status
@@ -125,21 +140,15 @@ try
 {
     while ($running)
     {
+        # Wait on the request itself, so it is answered as soon as it arrives (Wait-Event would hold
+        # it for up to its whole timeout). Lock events carry their own time, so reading them up to a
+        # second late does not change what is logged.
         $task = $listener.GetContextAsync()
-        while (-not $task.IsCompleted)
+        while (-not $task.AsyncWaitHandle.WaitOne(1000))
         {
-            $e = Wait-Event -SourceIdentifier TimeClockSession -Timeout 1
-            if ($e)
-            {
-                $reason = [string]$e.SourceEventArgs.Reason
-                Remove-Event -EventIdentifier $e.EventIdentifier
-                if ($map.ContainsKey($reason))
-                {
-                    Write-LockEvent $map[$reason] $reason $e.TimeGenerated   # when it happened, not now
-                }
-            }
-            Save-LockEvents
+            Read-SessionEvents
         }
+        Read-SessionEvents
 
         $ctx = $task.Result
         try
