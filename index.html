@@ -203,8 +203,11 @@
   }
   function pushData() {
     clearTimeout(pushTimer);
+    // No keepalive: browsers fail a keepalive request whose body is over 64 KiB, and the whole data
+    // set passes that within weeks. A push lost when the page closes is recovered by connect(),
+    // which sends this browser's newer copy (savedAt) the next time the page opens.
     pushTimer = setTimeout(() => {
-      fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' }, keepalive: true,
+      fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ punches: db.punches, events: db.events, lockSync: db.lockSync, settings: db.settings, savedAt: db.savedAt }) })
         .then(r => { if (!r.ok) throw new Error(); })
         .catch(() => alert('Could not save to the Time Clock service. Is it still running?'));
