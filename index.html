@@ -575,11 +575,13 @@
     const punches = cleanEntries(data.punches, Object.keys(LABEL));
     const events = Array.isArray(data.events) ? cleanEntries(data.events, ['Lock', 'Unlock']) : [];
     if (!punches || !events) { alert('That backup has entries this page cannot read, so nothing was restored.'); return; }
-    if (!confirm(`Replace all current data with this backup (${punches.length} entries)?`)) return;
+    if (!confirm(`Replace all current data with this backup (${punches.length} entries, ${events.length} lock events)?`)) return;
     const s = Object.assign({}, data.settings), target = Number(s.target);
-    // In service mode the lock events stay as they are, and so does lockSync, so lock rows the user
-    // deleted or edited are not imported again from the service's log.
-    db = { punches, events: hosted ? db.events : events, lockSync: db.lockSync,
+    // The backup's lock events are restored in service mode too. lockSync moves to now (or past the
+    // newest restored event), so the service's log does not add again absences the backup already
+    // has, or lock rows the user deleted or edited.
+    const lockSync = hosted ? events.reduce((m, e) => Math.max(m, e.t), Math.max(db.lockSync || 0, Date.now())) : db.lockSync;
+    db = { punches, events, lockSync,
            settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 } };
     $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
     save(); render();
