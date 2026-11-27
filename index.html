@@ -132,16 +132,28 @@
   const STATE_TEXT = { out:'Clocked out', work:'Working', meal:'On meal', break:'On break' };
 
   // Problems shown under the Data card: entries set aside on load, or saves that failed.
-  let loadNote = '', saveFailed = false;
+  let loadNote = '', serviceNote = '', saveFailed = false;
   let db = load();
   // Reads the saved data. Entries the page cannot use (no known type, no numeric time) would stop it
   // rendering at all, so they are left out; the saved text is first copied to KEY + '.unreadable' so
   // nothing is lost, and a note says so.
   function load() {
-    let raw = null, saved = null, dropped = 0;
+    let raw = null, saved = null;
     try { raw = localStorage.getItem(KEY); } catch { /* storage blocked */ }
     if (raw == null) return { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
     try { saved = JSON.parse(raw); } catch { /* not JSON */ }
+    const { data, dropped } = readData(saved);
+    if (dropped) {
+      try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
+      loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
+                 `A copy of the original is kept in this browser under "${KEY}.unreadable".`;
+    }
+    return data;
+  }
+  // The checks for saved data, from this browser or from the service's data.json: { data, dropped },
+  // where dropped counts what was left out (the whole thing, when it is not an object).
+  function readData(saved) {
+    let dropped = 0;
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { dropped++; saved = {}; }
     const keep = (list, types) => {
       if (!Array.isArray(list)) { if (list != null) dropped++; return []; }
@@ -160,12 +172,7 @@
     };
     if (Number.isFinite(saved.lockSync)) data.lockSync = saved.lockSync;
     if (Number.isFinite(saved.savedAt)) data.savedAt = saved.savedAt;
-    if (dropped) {
-      try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
-      loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
-                 `A copy of the original is kept in this browser under "${KEY}.unreadable".`;
-    }
-    return data;
+    return { data, dropped };
   }
   // Each tab holds its own copy of the data and saves all of it, so a second open tab would
   // overwrite this one's changes. When another tab saves, take its copy.
@@ -313,7 +320,7 @@
       ? (lockLive ? 'Lock tracking is on (Time Clock service).' : 'Lock tracking is offline: the Time Clock service is not responding.')
       : IDLE_TEXT[idleState];
     const warn = [saveFailed && 'Your last change could not be saved in this browser (storage is full or blocked). ' +
-                  'It will be lost when this page closes. Click Backup now.', loadNote].filter(Boolean).join(' ');
+                  'It will be lost when this page closes. Click Backup now.', loadNote, serviceNote].filter(Boolean).join(' ');
     $('dataWarn').textContent = warn; $('dataWarn').hidden = !warn;
     $('storeInfo').textContent = (hosted
       ? 'Data is stored in %LOCALAPPDATA%\\TimeClock.'
@@ -682,17 +689,33 @@
     try {
       const r = await fetch('/api/data', { headers: API_HEADERS });
       if (!r.ok) return;
-      const remote = await r.json();
+      // The service answered, so this is service mode even if its file cannot be used.
       hosted = true;
+      let parsed = null;
+      try { parsed = JSON.parse(await r.text()); } catch { /* cut off or edited by hand */ }
+      const FILE = '%LOCALAPPDATA%\\TimeClock\\data.json';
+      const unreadable = !parsed || typeof parsed !== 'object' || Array.isArray(parsed);
+      // Entries the page cannot use are left out, as for this browser's own data (load()).
+      const { data: remote, dropped } = readData(unreadable ? {} : parsed);
+      if (unreadable) {
+        // Keep the file as it is (nothing is sent until you make a change) and show this browser's copy.
+        serviceNote = `The Time Clock service's data file (${FILE}) could not be read, so this browser's copy is shown. ` +
+                      `Your next change replaces that file with this copy. The last good version may be in data.json.bak.`;
+      } else if (dropped) {
+        serviceNote = `Some entries in ${FILE} could not be read (${dropped} item${dropped > 1 ? 's' : ''}) ` +
+                      `and were left out. The file is unchanged until your next change.`;
+      }
       // This browser's copy is newer when changes were made while the service was down (their
       // pushes failed): keep it and send it, rather than letting the older file overwrite it.
-      const localNewer = (db.savedAt || 0) > (Number(remote.savedAt) || 0);
-      if (remote.punches && remote.punches.length && !localNewer) {
+      const localNewer = (db.savedAt || 0) > (remote.savedAt || 0);
+      if (unreadable) {
+        /* keep this browser's copy, send nothing yet */
+      } else if (remote.punches.length && !localNewer) {
         db.punches = remote.punches;
-        db.events = remote.events || [];
+        db.events = remote.events;
         db.lockSync = remote.lockSync || 0;
-        db.settings = Object.assign(db.settings, remote.settings);
-        db.savedAt = Number(remote.savedAt) || 0;
+        db.settings = remote.settings;
+        db.savedAt = remote.savedAt || 0;
       } else if (db.punches.length || db.events.length) {
         pushData();                 // first run, or newer here: move this browser's data into the file
       }

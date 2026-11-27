@@ -195,11 +195,22 @@ try
                 $reader = New-Object IO.StreamReader($req.InputStream, [Text.Encoding]::UTF8)
                 $body = $reader.ReadToEnd()
                 $null = $body | ConvertFrom-Json        # reject anything that isn't JSON
+                # Write a temporary file and swap it in, so a crash mid-write cannot leave a cut-off
+                # data.json. The old file becomes data.json.bak only if it is readable, so a bad
+                # file never replaces the last good backup.
+                $tmp = "$dataFile.tmp"
+                [IO.File]::WriteAllText($tmp, $body)
                 if (Test-Path $dataFile)
                 {
-                    Copy-Item -Path $dataFile -Destination "$dataFile.bak" -Force
+                    $good = $true
+                    try { $null = [IO.File]::ReadAllText($dataFile) | ConvertFrom-Json } catch { $good = $false }
+                    $backup = if ($good) { "$dataFile.bak" } else { [NullString]::Value }   # $null would pass as ""
+                    [IO.File]::Replace($tmp, $dataFile, $backup)
                 }
-                [IO.File]::WriteAllText($dataFile, $body)
+                else
+                {
+                    [IO.File]::Move($tmp, $dataFile)
+                }
                 Send-Text $ctx 200 'ok'
             }
             elseif ($path -eq '/api/events' -and $req.HttpMethod -eq 'GET')
