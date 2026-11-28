@@ -44,6 +44,20 @@ Everything is saved in your browser's local storage for this site. Nothing is se
 > at the other address. Restore replaces everything already there. Pick one browser and keep
 > using it, and back up regularly.
 
+If saved data cannot be read when the page opens, the entries it can use are kept, the rest are
+left out, and a note says so. The saved data as it was is kept in this browser's local storage
+under `timeClock.v2.unreadable`; you can read it in the browser's developer tools (Application →
+Local storage) and send it in with a bug report.
+
+### Diagnostics
+
+To help troubleshoot lock tracking, the page also keeps a diagnostic log in local storage under
+`timeClock.diag`: the last 3,000 records of what the browser reported (page opened, with the
+browser's user-agent string; tab shown or hidden, focus, screen locked or unlocked, timer gaps),
+each with its time and a random tab id. It is not part of Backup, CSV or the totals, and it never
+leaves the browser unless you click **Diagnostics**, which downloads it as a file. **Clear all
+data** does not delete it; clearing the site's data in the browser does.
+
 ## Optional: Windows service mode
 
 `time-clock.cmd` runs a small PowerShell host on `http://localhost:47653/` that records lock and
@@ -55,3 +69,13 @@ The page opens at an address ending in `?k=` and a key that belongs to your Wind
 in `%LOCALAPPDATA%\TimeClock\token`). Without the key the page and its data are refused, so other
 users and programs on the PC can't read your entries through the port. Bookmark the address it
 opens, or just run `time-clock.cmd` again.
+
+Files in `%LOCALAPPDATA%\TimeClock` (back up the whole folder to keep everything):
+
+| File | What it holds |
+|---|---|
+| `data.json` | Your entries, lock rows and settings, as the page last saved them |
+| `data.json.bak` | The previous readable `data.json`, kept on each save |
+| `lock-events.csv` | Every lock and unlock the service logged (`time,Lock or Unlock,Windows reason`) |
+| `token` | The key in the page's address |
+| `error.log` | Why the service could not start, or could not write `lock-events.csv`, when that happens |

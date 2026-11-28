@@ -41,6 +41,7 @@
   #rows tr:not(.dayhead) td { white-space:nowrap; }
   #rows tr:not(.dayhead) td:first-child { padding-left:28px; }
   .dayhead .worked { float:right; font-weight:600; }
+  .dayhead button { background:none; border:0; border-radius:4px; padding:0; font-weight:700; }
   .stats { display:flex; gap:20px; flex-wrap:wrap; margin-top:8px; }
   .stats b { display:block; font-size:18px; font-variant-numeric:tabular-nums; }
 </style>
@@ -54,7 +55,7 @@
     <div class="clock" id="clock">00:00:00</div>
     <div><span class="state" id="state">Clocked out</span> <span class="muted" id="since"></span></div>
     <div class="row" style="margin-top:12px">
-      <input type="text" id="desc" placeholder="Description (optional) — applied to the next button you press" autocomplete="off">
+      <input type="text" id="desc" aria-label="Description for the next punch" placeholder="Description (optional) — applied to the next button you press" autocomplete="off">
     </div>
     <div class="grid">
       <button class="primary" id="b-In">Clock In</button>
@@ -132,16 +133,28 @@
   const STATE_TEXT = { out:'Clocked out', work:'Working', meal:'On meal', break:'On break' };
 
   // Problems shown under the Data card: entries set aside on load, or saves that failed.
-  let loadNote = '', saveFailed = false;
+  let loadNote = '', serviceNote = '', saveFailed = false;
   let db = load();
   // Reads the saved data. Entries the page cannot use (no known type, no numeric time) would stop it
   // rendering at all, so they are left out; the saved text is first copied to KEY + '.unreadable' so
   // nothing is lost, and a note says so.
   function load() {
-    let raw = null, saved = null, dropped = 0;
+    let raw = null, saved = null;
     try { raw = localStorage.getItem(KEY); } catch { /* storage blocked */ }
     if (raw == null) return { punches: [], events: [], settings: { target: 40, weekStart: 1 } };
     try { saved = JSON.parse(raw); } catch { /* not JSON */ }
+    const { data, dropped } = readData(saved);
+    if (dropped) {
+      try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
+      loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
+                 `A copy of the original is kept in this browser under "${KEY}.unreadable".`;
+    }
+    return data;
+  }
+  // The checks for saved data, from this browser or from the service's data.json: { data, dropped },
+  // where dropped counts what was left out (the whole thing, when it is not an object).
+  function readData(saved) {
+    let dropped = 0;
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) { dropped++; saved = {}; }
     const keep = (list, types) => {
       if (!Array.isArray(list)) { if (list != null) dropped++; return []; }
@@ -160,12 +173,7 @@
     };
     if (Number.isFinite(saved.lockSync)) data.lockSync = saved.lockSync;
     if (Number.isFinite(saved.savedAt)) data.savedAt = saved.savedAt;
-    if (dropped) {
-      try { localStorage.setItem(KEY + '.unreadable', raw); } catch { /* no room */ }
-      loadNote = `Some saved data could not be read (${dropped} item${dropped > 1 ? 's' : ''}) and was left out. ` +
-                 `A copy of the original is kept in this browser under "${KEY}.unreadable".`;
-    }
-    return data;
+    return { data, dropped };
   }
   // Each tab holds its own copy of the data and saves all of it, so a second open tab would
   // overwrite this one's changes. When another tab saves, take its copy.
@@ -203,8 +211,11 @@
   }
   function pushData() {
     clearTimeout(pushTimer);
+    // No keepalive: browsers fail a keepalive request whose body is over 64 KiB, and the whole data
+    // set passes that within weeks. A push lost when the page closes is recovered by connect(),
+    // which sends this browser's newer copy (savedAt) the next time the page opens.
     pushTimer = setTimeout(() => {
-      fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' }, keepalive: true,
+      fetch('/api/data', { method: 'PUT', headers: { ...API_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({ punches: db.punches, events: db.events, lockSync: db.lockSync, settings: db.settings, savedAt: db.savedAt }) })
         .then(r => { if (!r.ok) throw new Error(); })
         .catch(() => alert('Could not save to the Time Clock service. Is it still running?'));
@@ -294,8 +305,14 @@
       const open = expanded.has(ds);
       const head = document.createElement('tr'), hc = document.createElement('td');
       head.className = 'dayhead'; hc.colSpan = 6; hc.title = open ? 'Collapse' : 'Expand';
-      hc.onclick = () => { open ? expanded.delete(ds) : expanded.add(ds); render(); };
-      const title = document.createElement('strong');
+      // The whole header toggles on a click; the day name is a real button, so the keyboard and
+      // screen readers can reach it too (its click bubbles to this handler). Focus stays on it.
+      hc.onclick = () => {
+        open ? expanded.delete(ds) : expanded.add(ds); render();
+        const again = document.querySelector(`#rows button[data-day="${ds}"]`); if (again) again.focus();
+      };
+      const title = document.createElement('button');
+      title.type = 'button'; title.dataset.day = ds; title.setAttribute('aria-expanded', String(open));
       title.textContent = `${open ? '▾' : '▸'} ${d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}`;
       const worked = document.createElement('span'); worked.className = 'worked'; worked.textContent = `${fmtDur(tot.work)} worked (${hours(tot.work)} h)`;
       hc.append(title, worked); head.appendChild(hc); tbody.appendChild(head);
@@ -310,7 +327,7 @@
       ? (lockLive ? 'Lock tracking is on (Time Clock service).' : 'Lock tracking is offline: the Time Clock service is not responding.')
       : IDLE_TEXT[idleState];
     const warn = [saveFailed && 'Your last change could not be saved in this browser (storage is full or blocked). ' +
-                  'It will be lost when this page closes. Click Backup now.', loadNote].filter(Boolean).join(' ');
+                  'It will be lost when this page closes. Click Backup now.', loadNote, serviceNote].filter(Boolean).join(' ');
     $('dataWarn').textContent = warn; $('dataWarn').hidden = !warn;
     $('storeInfo').textContent = (hosted
       ? 'Data is stored in %LOCALAPPDATA%\\TimeClock.'
@@ -388,7 +405,7 @@
   function timeCell(x, side) {
     const item = x[side], td = document.createElement('td'), ti = document.createElement('input');
     const implied = !item && side === 'end' && x.implicit && !x.missing;
-    ti.type = 'time'; ti.step = 1;
+    ti.type = 'time'; ti.step = 1; ti.setAttribute('aria-label', `${KIND[x.kind]} ${side}`);
     ti.value = item ? fmtTime(item.t) : implied ? fmtTime(x.endAt) : '';
     if (implied) { ti.className = 'implied'; ti.title = 'Ended by Clock Out. Change it to record a separate end.'; }
     else if (!item && (side === 'start' || x.missing)) { ti.className = 'missing'; ti.title = `No ${side} recorded. Enter one.`; }
@@ -400,10 +417,13 @@
       if (!/^\d{2}:\d{2}(:\d{2})?$/.test(ti.value) || !Number.isFinite(h) || !Number.isFinite(m)) { render(); return; }
       const live = current(item);
       if (item && !live) { render(); return; }     // deleted in another tab
-      const d = new Date(item ? item.t : (x.startAt ?? x.endAt)); d.setHours(h, m, s || 0, 0);
-      // The box holds a time only. An end at or before its start is on a later day (a shift past
-      // midnight); a new start at or after its end is on an earlier day. A start moved past its end
-      // would re-pair the day, so that is refused.
+      // An end with a known start is placed from the start's date, not its own: an end already rolled
+      // to the next day would otherwise stay there when corrected (09:00 to 17:00 reading 32 hours).
+      const base = side === 'end' && x.startAt != null ? x.startAt : item ? item.t : (x.startAt ?? x.endAt);
+      const d = new Date(base); d.setHours(h, m, s || 0, 0);
+      // The box holds a time only. An end lands on the first such time after its start (a later day
+      // for a shift past midnight); a new start at or after its end is on an earlier day. A start
+      // moved past its end would re-pair the day, so that is refused.
       if (side === 'end' && x.startAt != null) while (d.getTime() <= x.startAt) d.setDate(d.getDate() + 1);
       if (side === 'start' && x.endAt != null && d.getTime() >= x.endAt) {
         if (item) { alert('The start must be before the end.'); render(); return; }
@@ -428,7 +448,7 @@
     cell(tr, x.startAt == null || x.missing ? '' : fmtDur((x.endAt ?? now) - x.startAt) + (x.endAt == null ? '…' : ''), 'muted');
 
     const dc = document.createElement('td'), di = document.createElement('input');
-    di.type = 'text'; di.placeholder = 'add description';
+    di.type = 'text'; di.placeholder = 'add description'; di.setAttribute('aria-label', `${KIND[x.kind]} description`);
     di.value = [x.start && x.start.desc, x.end && x.end.desc].filter(Boolean).join(' · ');
     di.onchange = () => {
       const keep = current(x.start || x.end), other = x.start ? current(x.end) : null;
@@ -440,6 +460,7 @@
 
     const xc = document.createElement('td'), del = document.createElement('button');
     del.className = 'small danger'; del.textContent = '✕'; del.title = 'Delete this row';
+    del.setAttribute('aria-label', `Delete ${KIND[x.kind]} row` + (x.at != null ? ` at ${showTime(x.at)}` : ''));
     del.onclick = () => {
       if (!confirm(`Delete this ${KIND[x.kind]} row?`)) return;
       const gone = [current(x.start), current(x.end)].filter(Boolean), keep = p => !gone.includes(p);
@@ -562,11 +583,13 @@
     const punches = cleanEntries(data.punches, Object.keys(LABEL));
     const events = Array.isArray(data.events) ? cleanEntries(data.events, ['Lock', 'Unlock']) : [];
     if (!punches || !events) { alert('That backup has entries this page cannot read, so nothing was restored.'); return; }
-    if (!confirm(`Replace all current data with this backup (${punches.length} entries)?`)) return;
+    if (!confirm(`Replace all current data with this backup (${punches.length} entries, ${events.length} lock events)?`)) return;
     const s = Object.assign({}, data.settings), target = Number(s.target);
-    // In service mode the lock events stay as they are, and so does lockSync, so lock rows the user
-    // deleted or edited are not imported again from the service's log.
-    db = { punches, events: hosted ? db.events : events, lockSync: db.lockSync,
+    // The backup's lock events are restored in service mode too. lockSync moves to now (or past the
+    // newest restored event), so the service's log does not add again absences the backup already
+    // has, or lock rows the user deleted or edited.
+    const lockSync = hosted ? events.reduce((m, e) => Math.max(m, e.t), Math.max(db.lockSync || 0, Date.now())) : db.lockSync;
+    db = { punches, events, lockSync,
            settings: { target: Number.isFinite(target) && target >= 0 ? target : 40, weekStart: Number(s.weekStart) === 0 ? 0 : 1 } };
     $('target').value = db.settings.target; $('weekStart').value = db.settings.weekStart;
     save(); render();
@@ -676,17 +699,36 @@
     try {
       const r = await fetch('/api/data', { headers: API_HEADERS });
       if (!r.ok) return;
-      const remote = await r.json();
+      // The service answered, so this is service mode even if its file cannot be used.
       hosted = true;
+      let parsed = null;
+      try { parsed = JSON.parse(await r.text()); } catch { /* cut off or edited by hand */ }
+      const FILE = '%LOCALAPPDATA%\\TimeClock\\data.json';
+      const unreadable = !parsed || typeof parsed !== 'object' || Array.isArray(parsed);
+      // Entries the page cannot use are left out, as for this browser's own data (load()).
+      const { data: remote, dropped } = readData(unreadable ? {} : parsed);
+      if (unreadable) {
+        // Keep the file as it is (nothing is sent until you make a change) and show this browser's copy.
+        serviceNote = `The Time Clock service's data file (${FILE}) could not be read, so this browser's copy is shown. ` +
+                      `Your next change replaces that file with this copy. The last good version may be in data.json.bak.`;
+      } else if (dropped) {
+        serviceNote = `Some entries in ${FILE} could not be read (${dropped} item${dropped > 1 ? 's' : ''}) ` +
+                      `and were left out. The file is unchanged until your next change.`;
+      }
       // This browser's copy is newer when changes were made while the service was down (their
       // pushes failed): keep it and send it, rather than letting the older file overwrite it.
-      const localNewer = (db.savedAt || 0) > (Number(remote.savedAt) || 0);
-      if (remote.punches && remote.punches.length && !localNewer) {
+      const localNewer = (db.savedAt || 0) > (remote.savedAt || 0);
+      if (unreadable) {
+        /* keep this browser's copy, send nothing yet */
+      } else if ((remote.savedAt != null || remote.punches.length) && !localNewer) {
+        // A file the page saved (it has savedAt) is taken whenever it is not older, even with no
+        // punches: it may have been cleared from another browser, and its events, lockSync and
+        // settings count too. Only an empty file ({}, first run) gets this browser's data.
         db.punches = remote.punches;
-        db.events = remote.events || [];
+        db.events = remote.events;
         db.lockSync = remote.lockSync || 0;
-        db.settings = Object.assign(db.settings, remote.settings);
-        db.savedAt = Number(remote.savedAt) || 0;
+        db.settings = remote.settings;
+        db.savedAt = remote.savedAt || 0;
       } else if (db.punches.length || db.events.length) {
         pushData();                 // first run, or newer here: move this browser's data into the file
       }
